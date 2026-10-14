@@ -20,3 +20,5 @@ src/page_scraper.py
 evaluation/*.txt
 
 src/scrapers/*
+
+DB/
