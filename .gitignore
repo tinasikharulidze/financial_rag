@@ -14,11 +14,11 @@ wheels/
 
 matsne_data/*
 
-src/document_scraper.py
-src/page_scraper.py
+# src/document_scraper.py
+# src/page_scraper.py
 
 evaluation/*.txt
 
-src/scrapers/*
+# src/scrapers/*
 
 DB/

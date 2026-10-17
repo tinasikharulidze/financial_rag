@@ -51,7 +51,7 @@ LINK_TEXT = "იხილე აქ"
 
 MAX_QUESTIONS = 5
 
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini/gemini-2.5-flash")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini/gemini-3.6-flash")
 REWRITE_MODEL = os.getenv("REWRITE_MODEL", CHAT_MODEL)
 EMBED_MODEL = "BAAI/bge-m3"
 
@@ -62,7 +62,7 @@ OUT_DIR = Path(os.getenv("OUT_DIR", "matsne_data/generation"))
 DB_PATH = Path(os.getenv("DB_PATH", "DB/app.db"))
 
 # Retrieval settings: same defaults as generate.py
-BUDGET_TOKENS = 12000
+BUDGET_TOKENS = 20000
 CPT = 1.8
 CAP_CHARS = 6000
 PER_DOC = 10
