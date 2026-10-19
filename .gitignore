@@ -22,3 +22,6 @@ evaluation/*.txt
 # src/scrapers/*
 
 DB/
+# knowledge-graph draft artefacts
+data/kg/
+.pytest_cache/

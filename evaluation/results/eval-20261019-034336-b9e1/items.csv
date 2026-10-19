@@ -1,0 +1,14 @@
+﻿assertion,passed,detail
+art9_1 exists in 4964423 and starts at the first amendment's effective date,True,['2022-05-03'] vs 2022-05-03
+art4/p3 changes at V1 and again at V2,True,"['2021-01-01', '2022-05-03', '2023-07-01']"
+2060636: number of distinct version dates is between 2 and amendments+1,True,"14 dates, 13 amendments"
+2060636: provision versions are contiguous (no gaps or overlaps),True,"gaps=0, overlaps=0"
+2060636: every Provision has at least one version,True,
+4964423: number of distinct version dates is between 2 and amendments+1,True,"3 dates, 2 amendments"
+4964423: provision versions are contiguous (no gaps or overlaps),True,"gaps=0, overlaps=0"
+4964423: every Provision has at least one version,True,
+5679194: number of distinct version dates is between 2 and amendments+1,True,"2 dates, 1 amendments"
+5679194: provision versions are contiguous (no gaps or overlaps),True,"gaps=0, overlaps=0"
+5679194: every Provision has at least one version,True,
+less than 10% of amendment instructions are unresolved,True,0/117
+4822603: snapshot act has exactly one version date,True,

@@ -1,0 +1,34 @@
+{
+  "gold_items": {
+    "A": 35,
+    "B": 22,
+    "C": 9
+  },
+  "findings_total": 4,
+  "recall_A": 0.0,
+  "recall_B": 0.0,
+  "precision": 0.0,
+  "c_false_positive_rate": 0.0,
+  "version_attribution_accuracy": null,
+  "chance_calibration": {
+    "very_high": {
+      "findings": 3,
+      "true_positive": 0,
+      "precision": 0.0
+    },
+    "high": {
+      "findings": 1,
+      "true_positive": 0,
+      "precision": 0.0
+    }
+  },
+  "gold_by_chance": {
+    "A": {},
+    "B": {}
+  },
+  "action_types": {
+    "ADJUST_SECTION": 3,
+    "ADD_SECTION": 1
+  },
+  "match_kinds": {}
+}

@@ -1,0 +1,57 @@
+# Configuration of the regulatory knowledge graph draft (docs/KG_ARCHITECTURE.md).
+# All paths are relative to the repository root.
+paths:
+  raw_html: matsne_data/graph_docs/raw
+  amendment_docs: matsne_data/graph_docs/amendment_docs.jsonl
+  amendment_edges: matsne_data/graph_docs/amendment_edges.jsonl
+  cross_references: matsne_data/graph_docs/cross_references.csv
+  company_docs: model_risk_company_docs
+  gold_labels: model_risk_company_docs/answer_key_gold_labels.csv
+  data_dir: data/kg
+  db: data/kg/kg.sqlite
+  runs: data/kg/runs
+  reports: data/kg/reports
+  indexes: data/kg/indexes
+  llm_cache: data/kg/llm_cache
+  eval_results: evaluation/results
+
+acts:
+  # doc_id -> mode.  "versioned": original text + amendments are replayed.  "snapshot": latest consolidated text only.
+  "2060636": {mode: versioned, short: "კაპიტალის ადეკვატურობა"}
+  "5679194": {mode: versioned, short: "მოსალოდნელი საკრედიტო ზარალი"}
+  "4822603": {mode: snapshot, snapshot_date: "2025-02-27", short: "ფიზიკური პირის დაკრედიტება"}
+  "4964423": {mode: versioned, short: "მოდელის რისკის მართვა"}
+obligation_acts: ["4964423"]
+entity_type: commercial_bank
+
+llm:
+  models:              # LiteLLM ids, same format as src/chatbot.py; tried in this order
+    - gemini/gemini-3.6-flash
+    - gemini/gemini-3.5-flash
+    - gemini/gemini-3.5-flash-lite
+    - gemini/gemini-2.5-flash
+  daily_request_limit: 20
+  temperature: 0
+  max_output_tokens: 32768     # thinking tokens count against this
+  reasoning_effort: low        # keeps Gemini's hidden reasoning short; 3.x models cannot switch it off
+  retries_on_invalid_json: 1
+  # secrets: python-dotenv loads the file named in FINRAG_ENV_FILE (default ../.env next to the repo)
+
+extraction:
+  obligation_batch: 10          # provisions per LLM call
+mapping:
+  top_k_clauses: 5
+  judge_batch: 12               # obligations per LLM call
+  # an obligation is "relevant" for a document when its category is listed for the doc_type
+  doc_type_table: configs/doc_type_obligations.yaml
+retrieval:
+  top_k: 30
+  keep: 6
+  rrf_k: 60
+  ngram: 4
+  dense:
+    enabled: false              # BGE-M3 dense vectors (needs sentence-transformers + model download)
+    model: BAAI/bge-m3
+  reranker:
+    enabled: false
+    model: BAAI/bge-reranker-v2-m3

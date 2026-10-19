@@ -1,0 +1,44 @@
+{
+  "llm_calls": 0,
+  "cache_hit_rate": null,
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "by_purpose": {},
+  "by_run_kind": {
+    "extract-obligations": {
+      "runs": 1,
+      "p50_s": 0.0,
+      "p95_s": 0.0
+    },
+    "eval": {
+      "runs": 1,
+      "p50_s": 0.0,
+      "p95_s": 0.0
+    },
+    "extract-refs": {
+      "runs": 1,
+      "p50_s": 0.0,
+      "p95_s": 0.0
+    },
+    "ingest-company-docs": {
+      "runs": 1,
+      "p50_s": 2.0,
+      "p95_s": 2.0
+    },
+    "parse-acts": {
+      "runs": 1,
+      "p50_s": 0.0,
+      "p95_s": 0.0
+    },
+    "parse-amendments": {
+      "runs": 1,
+      "p50_s": 0.0,
+      "p95_s": 0.0
+    },
+    "consolidate": {
+      "runs": 1,
+      "p50_s": 1.0,
+      "p95_s": 1.0
+    }
+  }
+}

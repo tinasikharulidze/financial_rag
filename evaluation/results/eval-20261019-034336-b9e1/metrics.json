@@ -1,0 +1,14 @@
+{
+  "parse": {
+    "instructions": 117,
+    "rules": 105,
+    "llm": 0,
+    "unsupported": 12,
+    "unresolved": 0,
+    "share_rules": 0.8974358974358975,
+    "share_llm": 0.0,
+    "share_unresolved": 0.0
+  },
+  "assertions_passed": 13,
+  "assertions_total": 13
+}

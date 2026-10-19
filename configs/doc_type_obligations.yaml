@@ -1,0 +1,27 @@
+# Which obligation categories a company document of a given doc_type must address.
+# Categories come from the obligation extractor (src/kg/extract/prompts/obligations.md).
+# Hand-written and short on purpose (see docs/KG_ARCHITECTURE.md section 11).
+categories:
+  - governance            # three lines of defence, roles, board oversight
+  - policy                # model risk policy and procedures
+  - inventory             # model inventory / registry
+  - development           # model building, data quality, assumptions, testing
+  - validation            # independent internal validation, frequency, scope
+  - monitoring            # ongoing performance monitoring, outcomes analysis, overrides
+  - explainability        # transparency, interpretability, bias
+  - ethics                # ethics principles
+  - audit                 # internal audit of the model risk framework
+  - outsourcing           # third-party models and outsourced validation
+  - supervisory           # supervisory model status, NBG consent, reporting to NBG
+  - launch                # model deployment / production approval
+  - non_obligation        # definitions, scope, entry into force (never mapped)
+
+doc_types:
+  policy:                 [governance, policy, inventory, development, validation, monitoring, explainability, ethics, audit, outsourcing, supervisory, launch]
+  inventory:              [inventory, supervisory, validation, outsourcing]
+  validation_report:      [validation, development, explainability, monitoring, outsourcing]
+  monitoring_report:      [monitoring, validation, explainability]
+  ethics_guideline:       [ethics, explainability, governance]
+  audit_report:           [audit, governance, validation, inventory, outsourcing]
+  supervisory_application: [supervisory, development, validation, monitoring, explainability]
+  other:                  []
