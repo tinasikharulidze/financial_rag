@@ -1,4 +1,4 @@
-# Configuration of the regulatory knowledge graph draft (docs/KG_ARCHITECTURE.md).
+# Configuration of the regulatory knowledge graph (docs/KG_ARCHITECTURE.md, docs/KG_V2_PLAN.md).
 # All paths are relative to the repository root.
 paths:
   raw_html: matsne_data/graph_docs/raw
@@ -14,44 +14,123 @@ paths:
   indexes: data/kg/indexes
   llm_cache: data/kg/llm_cache
   eval_results: evaluation/results
+  eval_gold: evaluation/gold
+  uploads: data/uploads            # uploaded company PDFs and generated revised documents (gitignored)
 
 acts:
   # doc_id -> mode.  "versioned": original text + amendments are replayed.  "snapshot": latest consolidated text only.
+  # domains / applies_to: defaults for the obligations extracted from the act (the model may narrow them with a citation).
   "2060636": {mode: versioned, short: "კაპიტალის ადეკვატურობა"}
   "5679194": {mode: versioned, short: "მოსალოდნელი საკრედიტო ზარალი"}
   "4822603": {mode: snapshot, snapshot_date: "2025-02-27", short: "ფიზიკური პირის დაკრედიტება"}
-  "4964423": {mode: versioned, short: "მოდელის რისკის მართვა"}
+  "4964423": {mode: versioned, short: "მოდელის რისკის მართვა", domains: [model_risk], applies_to: [commercial_bank]}
 obligation_acts: ["4964423"]
-entity_type: commercial_bank
+entity_type: commercial_bank          # v1 default; v2 takes the entity type from the company profile
+entity_types: [commercial_bank, microbank, microfinance_organization, payment_service_provider, other]
 
+# ----------------------------------------------------------------------------------------------------------- LLM
+# Switching models is a config-only change:
+#   * ONE model for everything:   set  single_model: gemini/gemini-3.5-flash   (rotation and step_models are ignored)
+#   * different model per step:   fill step_models (step name -> list of ids tried in this order)
+#   * no daily limit (billed):    daily_request_limit: null
+#   * model needs other options:  model_overrides: {"gemma": {json_mode: false, reasoning_effort: null}}
+#   * one step needs other options:  step_options: {judge: {thinking_level: high}}
+#   Options: json_mode, reasoning_effort (Gemini 2.5 / 3), thinking_level (Gemma 4 / Gemini 3: minimal = off,
+#   high = on), timeout_s. Order: defaults < model_overrides < step_options. A different model or option is a
+#   different cache key; stored step results are still reused unless the step is run with --force.
 llm:
+  single_model: null
   models:              # LiteLLM ids, same format as src/chatbot.py; tried in this order
-    - gemini/gemini-3.6-flash
-    - gemini/gemini-3.5-flash
-    - gemini/gemini-3.5-flash-lite
-    - gemini/gemini-2.5-flash
-  daily_request_limit: 20
+    - gemini/gemma-4-26b-a4b-it
+    # - gemini/gemma-4-31b-it
+    # - gemini/gemini-3.6-flash
+    # - gemini/gemini-3.5-flash
+    # - gemini/gemini-3.5-flash-lite
+    # - gemini/gemini-2.5-flash
+  step_models: {}      # e.g.  judge: [gemini/gemini-3.6-flash]   (steps: extract_obligations, amend_diff, doc_profile,
+                       #       triage, locate, judge, propose, merge, qa_answer, compare_summary, classify_doc)
+  daily_request_limit: 14400   # per model and day (each Gemma 4 model on AI Studio: 14.4K/day, 30/min); null = unlimited
+  max_requests_per_run: 150    # safety valve for one process (a full check of one document: ~45 requests)
+  json_mode: true              # response_format=json_object; the prompts ask for JSON anyway
+  model_overrides:             # substring of the model id -> options
+    "gemma": {reasoning_effort: null, thinking_level: minimal, tokens_per_minute: 14000}
+    # Gemma 4: a thinking budget is rejected (400) -> thinking_level (minimal = off); free tier: 16K input tokens/min,
+    # paced at 14K for headroom
+  step_options:                # step -> options; everything else keeps the model's default (Gemma: minimal = off)
+    triage: {thinking_level: high, timeout_s: 300}   # relevance: thinking ON (good answers take 2-3 min; a hung request is cut at 5)
+    judge: {thinking_level: high, timeout_s: 300}    # coverage: thinking ON
+  thinking_off_after_timeout: true   # a thinking request that times out (or fails twice) is asked once more without
+                                     # thinking: Gemma sometimes "thinks" past any timeout on the same input
+  thinking_level: null         # default for every model (null = not sent)
+  request_timeout_s: 300       # one request; Gemma answers can take minutes when the service is busy
+  server_error_backoff_s: [5, 15, 30, 60, 90]   # waits between retries after 5xx / timeouts, then the next model
+  tokens_per_minute: null      # default input-token limit per model and minute (null = no pacing); see model_overrides
+  chars_per_token: 2.0         # estimate for pacing (Google counted 2.19 for our Georgian prompts; lower = safer)
+  rate_limit_backoff_s: [65, 90, 120, 180, 240, 300]   # waits after a 429 that is NOT the daily quota (per-minute
+                               # requests/tokens); refused attempts seem to count too, so the waits grow. Then the
+                               # next model / "unavailable, repeat later"
   temperature: 0
   max_output_tokens: 32768     # thinking tokens count against this
   reasoning_effort: low        # keeps Gemini's hidden reasoning short; 3.x models cannot switch it off
   retries_on_invalid_json: 1
   # secrets: python-dotenv loads the file named in FINRAG_ENV_FILE (default ../.env next to the repo)
 
+# ----------------------------------------------------------------------------------------------------------- steps
 extraction:
-  obligation_batch: 10          # provisions per LLM call
+  obligation_batch: 5           # extraction units per LLM call (v2 prompts are longer than v1)
+  diff_batch: 1                 # changed units per amend-diff call (4 units = ~15K tokens: too big for Gemma's 16K/min)
+  context_chars: 800            # cap per referenced provision in the context builder
+  diff_on_reference_change: false   # also re-check units whose referenced provisions changed (more requests)
+
 mapping:
-  top_k_clauses: 5
-  judge_batch: 12               # obligations per LLM call
-  # an obligation is "relevant" for a document when its category is listed for the doc_type
-  doc_type_table: configs/doc_type_obligations.yaml
+  top_k_clauses: 8
+  triage_batch: 10              # obligations per triage call; with thinking ON 20 took 2-9 min and hit 500s
+  locate_batch: 30              # ~10.9K tokens per call for POL-RM-014
+  judge_batch: 3                # obligations per judge call (whole document ~12K tokens + 3 obligations + retry room)
+  proposal_batch: 5
+  merge_batch: 1                 # clauses per merge request (3 clauses of IA-2022-03 = 17.5K tokens: over the 14K/min pacing)
+  whole_doc_max_tokens: 10000   # document text the judge receives (estimated, llm.chars_per_token) up to this size is
+                                # read in full; POL-RM-014 = ~9,600. Gemma: 16K tokens/min = document + 3 obligations + prompt
+  chars_per_token: 2.2          # estimate for Georgian text when no tokenizer is available
+  clause_text_cap: 1500         # characters of a clause shown to the model in candidate mode
+  now: null                     # fix "today" for reproducible runs (ISO date)
+
+ranking:                        # score = gap x relevance (severity weights are all 1: severity is not used for now)
+  severity:  {critical: 1, high: 1, medium: 1, low: 1}
+  gap:       {contradicts: 1.0, none: 0.8, undecided: 0.8, partial: 0.6}   # none = missing
+  relevance: {relevant: 1.0, possibly: 0.5}
+  priority_thresholds: {critical: 0.95, high: 0.7, medium: 0.39}
+  # relevant:  contradicts 1.0 critical · missing 0.8 high · partial 0.6 medium
+  # possibly:  contradicts 0.5 medium   · missing 0.4 medium · partial 0.3 low
+
+tasks:
+  new_amendment_days: 180       # the "new" badge on tasks caused by a recent amendment
+
 retrieval:
   top_k: 30
   keep: 6
   rrf_k: 60
   ngram: 4
   dense:
-    enabled: false              # BGE-M3 dense vectors (needs sentence-transformers + model download)
-    model: BAAI/bge-m3
+    enabled: false              # needs sentence-transformers + model download (provider: local) or an embedding API
+    provider: local             # local | litellm
+    model: BAAI/bge-m3          # for provider litellm e.g. gemini/text-embedding-004
   reranker:
     enabled: false
     model: BAAI/bge-reranker-v2-m3
+
+# retained for the v1 code path (map-coverage / replay), removed with the clean-up in docs/KG_V2_IMPLEMENTATION.md
+legacy:
+  doc_type_table: configs/doc_type_obligations.yaml
+
+# ----------------------------------------------------------------------------------------------------------- demo data
+demo:
+  company: {id: bank-a, name: "ბანკი A", entity_type: commercial_bank, reg_number: "000000001"}
+  users:
+    - {email: bank@demo.ge, name: "დემო მომხმარებელი", password: demo1234, user_type: entity}
+    - {email: nbg@demo.ge, name: "NBG დემო", password: demo1234, user_type: regulator}
+  roles: ["რისკების მართვა", "შესაბამისობა", "იურიდიული"]
+
+# ----------------------------------------------------------------------------------------------------------- web app
+ui:
+  extra_pages: false           # Q&A, version comparison, graph, evaluation (hidden for now)

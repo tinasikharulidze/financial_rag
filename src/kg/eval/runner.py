@@ -57,25 +57,24 @@ def write_results(cfg, suite: str, run_id: str, result: dict) -> Path:
     return out
 
 
-def run_suite(cfg, store, run, suite: str) -> dict:
+def run_suite(cfg, store, run, suite: str, version: str | None = None) -> dict:
+    """``version`` limits the v2 suites (compliance, triage, proposals) to one document version."""
     if suite == "compliance":
-        from kg.eval import compliance
-        gold = compliance.load_gold(cfg)
-        res = compliance.evaluate(gold, compliance.finding_views(store))
-        from kg.services import reports
-        reps = []
-        for r in reports.list_reports(cfg):
-            full = reports.get(cfg, r["run_id"])
-            if full:
-                docs = {n["id"]: n["props"] for n in store.nodes("InternalDoc")}
-                for f in full.get("affected", []):
-                    cl = store.get_node(f["clause_id"]) if f.get("clause_id") else None
-                    ob = store.get_node(f["obligation_id"])
-                    f["doc_file"] = compliance.Path_name(docs.get(f["doc_id"], {}).get("file"))
-                    f["section_no"] = (cl or {}).get("props", {}).get("section_no")
-                    f["source_path"] = (ob or {}).get("props", {}).get("source_path")
-                reps.append(full)
-        res["replay_check"] = compliance.replay_check(cfg, gold, reps)
+        from kg.eval import v2suites
+        if store.q1("SELECT 1 FROM coverage LIMIT 1"):
+            res = v2suites.run_compliance_v2(cfg, store, version)
+        else:                                               # a database that only has v1 findings
+            from kg.eval import compliance
+            res = compliance.evaluate(compliance.load_gold(cfg), compliance.finding_views(store))
+    elif suite == "extraction":
+        from kg.eval import extraction
+        res = extraction.run_extraction(cfg, store)
+    elif suite == "triage":
+        from kg.eval import v2suites
+        res = v2suites.run_triage(cfg, store, version)
+    elif suite == "proposals":
+        from kg.eval import v2suites
+        res = v2suites.run_proposals(cfg, store, version)
     elif suite == "consolidation":
         from kg.eval import consolidation
         res = consolidation.run_consolidation(cfg, store)

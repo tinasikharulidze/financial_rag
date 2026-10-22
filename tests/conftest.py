@@ -56,6 +56,12 @@ def built(tmp_path_factory):
                         llm_cache=str(tmp / "data" / "cache"), eval_results=str(tmp / "eval"),
                         cross_references=str(tmp / "cross.csv"))
     cfg.path("data_dir").mkdir(parents=True)
+    cfg["llm"]["daily_request_limit"] = None            # tests use mock backends; no quota
+    cfg["llm"]["max_requests_per_run"] = None           # the safety valve of configs/kg.yaml is for real runs
+    cfg["llm"]["tokens_per_minute"] = None              # no pacing (real sleeps) against the fake model
+    for o in (cfg["llm"].get("model_overrides") or {}).values():
+        if isinstance(o, dict):
+            o.pop("tokens_per_minute", None)
     cfg["mapping"]["doc_type_table"] = str(base.path("data_dir").parents[1] / "configs" / "doc_type_obligations.yaml")
     store = SQLiteStore(cfg.path("db"))
     with Run(store, cfg.path("runs"), "build") as run:
@@ -64,4 +70,25 @@ def built(tmp_path_factory):
         jobs.consolidate(cfg, store, run)
         jobs.extract_refs(cfg, store, run)
         ingest_company_docs(cfg, store, run)
+    import shutil
+    shutil.copy(cfg.path("db"), tmp / "pristine.sqlite")          # untouched snapshot for the v2 tests (see ``kg``)
+    cfg["_pristine"] = str(tmp / "pristine.sqlite")
     return cfg, store
+
+
+@_pytest.fixture
+def kg(built, tmp_path):
+    """A private copy (config + store) of the freshly built database; tests may change it freely."""
+    import shutil
+    from kg.config import Config
+    from kg.store.sqlite_nx import SQLiteStore
+
+    cfg0, _ = built
+    cfg = Config(_json.loads(_json.dumps(dict(cfg0))))
+    d = tmp_path / "data"
+    d.mkdir()
+    shutil.copy(cfg0["_pristine"], d / "kg.sqlite")
+    cfg["paths"].update(data_dir=str(d), db=str(d / "kg.sqlite"), runs=str(d / "runs"), reports=str(d / "reports"),
+                        indexes=str(d / "indexes"), llm_cache=str(d / "cache"), eval_results=str(tmp_path / "eval"),
+                        uploads=str(tmp_path / "uploads"), eval_gold=str(tmp_path / "gold"))
+    return cfg, SQLiteStore(cfg.path("db"))

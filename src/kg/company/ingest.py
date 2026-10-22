@@ -24,8 +24,16 @@ def clause_id(doc_id: str, u) -> str:
     return f"{base}/{u.unit_type[:3]}{u.order}"
 
 
-def write_doc(store, pd: ParsedDoc, company: str | None = None, source: str = "corpus") -> dict:
-    doc_id = pd.doc_id
+def company_doc_id(company_id: str, pd: ParsedDoc) -> str:
+    """Node id of one document VERSION of a company: ``doc:<company>/<code>@<version>`` (plan section 4.1)."""
+    code = pd.doc_code or f"UPLOAD-{pd.sha1[:8]}"
+    return f"doc:{company_id}/{code}@{pd.version}"
+
+
+def write_doc(store, pd: ParsedDoc, company: str | None = None, source: str = "corpus", company_id: str | None = None,
+              family_id: str | None = None, status: str | None = None, doc_id: str | None = None,
+              extra_props: dict | None = None) -> dict:
+    doc_id = doc_id or (company_doc_id(company_id, pd) if company_id else pd.doc_id)
     # drop a previous version of the same document (idempotent re-ingestion)
     old = [n["id"] for n in store.nodes("Clause") if n["props"].get("doc") == doc_id]
     if old:
@@ -34,7 +42,8 @@ def write_doc(store, pd: ParsedDoc, company: str | None = None, source: str = "c
              "doc_type": pd.doc_type, "doc_type_method": pd.doc_type_method, "doc_date": pd.doc_date,
              "effective_date": pd.effective_date, "company": company or pd.company, "pages": pd.pages,
              "units": len(pd.units), "sha1": pd.sha1, "llm_fallback": pd.llm_fallback, "warnings": pd.warnings,
-             "source": source}
+             "source": source, "company_id": company_id, "family_id": family_id, "status": status,
+             **(extra_props or {})}
     nodes = [(doc_id, "InternalDoc", props, pd.doc_date, None)]
     edges = []
     seen: set[str] = set()
@@ -46,7 +55,7 @@ def write_doc(store, pd: ParsedDoc, company: str | None = None, source: str = "c
         nodes.append((cid, "Clause", {
             "doc": doc_id, "text": u.text, "section_no": u.section_no, "heading": u.heading,
             "unit_type": u.unit_type, "page": u.page, "order": u.order, "mapped": u.unit_type in MAPPED_TYPES,
-            "extra": u.extra}, pd.doc_date, None))
+            "extra": u.extra, "bbox": u.bbox, "company_id": company_id}, pd.doc_date, None))
         edges.append((doc_id, cid, "HAS_CLAUSE", {"order": u.order}, pd.doc_date, None))
     store.upsert_nodes(nodes)
     store.upsert_edges(edges)

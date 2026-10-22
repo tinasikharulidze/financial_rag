@@ -60,6 +60,27 @@ class DenseEncoder:
         return np.asarray(self._model.encode(texts, normalize_embeddings=True, batch_size=16))
 
 
+class LiteLLMEncoder:
+    """Embeddings through LiteLLM (e.g. ``gemini/text-embedding-004``), for setups without a local model.
+    Vectors are normalised; the HybridIndex caches them on disk per content hash."""
+
+    def __init__(self, model_name: str, batch: int = 64):
+        self.model_name, self.batch = model_name, batch
+        self.available = True
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        import litellm
+        from kg.llm import load_env
+        load_env()
+        out = []
+        for i in range(0, len(texts), self.batch):
+            resp = litellm.embedding(model=self.model_name, input=texts[i:i + self.batch])
+            out += [d["embedding"] if isinstance(d, dict) else d.embedding for d in resp.data]
+        mat = np.asarray(out, dtype=float)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        return mat / np.where(norms == 0, 1, norms)
+
+
 class HybridIndex:
     def __init__(self, items: list[dict], ngram: int = 4, rrf_k: int = 60, dense: DenseEncoder | None = None,
                  cache_dir: Path | None = None, name: str = "index"):
@@ -77,7 +98,8 @@ class HybridIndex:
             self._dense_mat = self._load_or_encode(cache_dir, name)
 
     def _load_or_encode(self, cache_dir, name):
-        key = hashlib.sha1("\n".join(f"{i['id']}\t{i['text']}" for i in self.items).encode()).hexdigest()[:16]
+        blob = getattr(self._encoder, "model_name", "") + "\n" + "\n".join(f"{i['id']}\t{i['text']}" for i in self.items)
+        key = hashlib.sha1(blob.encode()).hexdigest()[:16]
         path = Path(cache_dir) / f"{name}_{key}.npy" if cache_dir else None
         if path and path.exists():
             return np.load(path)
@@ -94,9 +116,7 @@ class HybridIndex:
     def get(self, item_id: str) -> dict | None:
         return self.by_id.get(item_id)
 
-    def search(self, query: str, k: int = 10, allowed: set[str] | None = None) -> list[tuple[str, float]]:
-        if not self.items:
-            return []
+    def _rankings(self, query: str, k: int, allowed: set[str] | None) -> list[list[str]]:
         rankings: list[list[str]] = []
         if self._bm25 is not None:
             q = char_ngrams(query, self.ngram)
@@ -110,17 +130,35 @@ class HybridIndex:
                 qv = self._encoder.encode([query])[0]
                 sims = self._dense_mat @ qv
                 order = np.argsort(-sims)
-                rankings.append([self.items[i]["id"] for i in order if allowed is None or self.items[i]["id"] in allowed][: max(k * 3, 30)])
+                rankings.append([self.items[i]["id"] for i in order
+                                 if allowed is None or self.items[i]["id"] in allowed][: max(k * 3, 30)])
             except Exception:
                 pass
+        return [r for r in rankings if r]
+
+    def search(self, query: str, k: int = 10, allowed: set[str] | None = None) -> list[tuple[str, float]]:
+        return self.search_multi([query], k, allowed)
+
+    def search_multi(self, queries: list[str], k: int = 10, allowed: set[str] | None = None) -> list[tuple[str, float]]:
+        """Several queries (e.g. the obligation text and its source provision): every query contributes a BM25 ranking
+        (and a dense one when vectors exist); all rankings are fused with RRF."""
+        if not self.items:
+            return []
+        rankings: list[list[str]] = []
+        for q in queries:
+            if q and q.strip():
+                rankings += self._rankings(q, k, allowed)
         if not rankings:
             return []
-        return rrf([r for r in rankings if r], self.rrf_k)[:k]
+        return rrf(rankings, self.rrf_k)[:k]
 
 
 def build_index(cfg, items: list[dict], name: str = "index") -> HybridIndex:
     rc = cfg["retrieval"]
-    enc = DenseEncoder(rc["dense"]["model"]) if rc["dense"].get("enabled") else None
+    enc = None
+    if rc["dense"].get("enabled"):
+        enc = (LiteLLMEncoder(rc["dense"]["model"]) if rc["dense"].get("provider") == "litellm"
+               else DenseEncoder(rc["dense"]["model"]))
     return HybridIndex(items, rc.get("ngram", 4), rc.get("rrf_k", 60), enc, cfg.path("indexes"), name)
 
 

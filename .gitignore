@@ -25,3 +25,12 @@ DB/
 # knowledge-graph draft artefacts
 data/kg/
 .pytest_cache/
+data/uploads/
+
+# macOS folder files
+.DS_Store
+# local runtime data (database, uploads, test uploads) and generated exports
+data/
+obligations_v2.jsonl
+# temporary files of one-step saves
+*.tmp

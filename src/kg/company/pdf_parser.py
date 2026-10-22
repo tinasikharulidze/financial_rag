@@ -42,6 +42,21 @@ class DocUnit:
     heading: str | None = None
     page: int = 1
     extra: dict = field(default_factory=dict)
+    bbox: list | None = None       # [x0, top, x1, bottom] on ``page`` (union of the unit's lines on its first page)
+
+
+def _box(ln: dict) -> list:
+    return [round(ln.get("x0", 0.0), 1), round(ln["top"], 1), round(ln.get("x1", 0.0), 1), round(ln["bottom"], 1)]
+
+
+def _grow(u: "DocUnit", ln: dict) -> "DocUnit":
+    """Extend the unit's bounding box with a line (only lines on the unit's first page)."""
+    if ln.get("page") != u.page:
+        return u
+    b = _box(ln)
+    u.bbox = b if u.bbox is None else [min(u.bbox[0], b[0]), min(u.bbox[1], b[1]), max(u.bbox[2], b[2]),
+                                       max(u.bbox[3], b[3])]
+    return u
 
 
 @dataclass
@@ -140,10 +155,11 @@ def parse_pdf(path: str | Path, llm=None, classify_llm: bool = True) -> ParsedDo
                     continue
                 size, bold = _line_style(ln)
                 lines.append({"kind": "line", "top": ln["top"], "bottom": ln["bottom"], "text": ln["text"].strip(),
-                              "size": size, "bold": bold, "page": pi, "height": pg.height})
+                              "size": size, "bold": bold, "page": pi, "height": pg.height,
+                              "x0": ln["x0"], "x1": ln["x1"]})
             for t in tables:
                 lines.append({"kind": "table", "top": t.bbox[1], "bottom": t.bbox[3], "rows": t.extract(), "page": pi,
-                              "height": pg.height})
+                              "height": pg.height, "x0": t.bbox[0], "x1": t.bbox[2]})
             lines.sort(key=lambda x: x["top"])
             raw_pages.append(lines)
 
@@ -207,8 +223,8 @@ def parse_pdf(path: str | Path, llm=None, classify_llm: bool = True) -> ParsedDo
                     continue
                 flush()
                 if any(RE_SIGN.search(" ".join(r)) for r in rows_clean):
-                    units.append(DocUnit(len(units), "signature", "\n".join(" ".join(c for c in r if c) for r in rows_clean),
-                                         page=pg))
+                    units.append(_grow(DocUnit(len(units), "signature",
+                                               "\n".join(" ".join(c for c in r if c) for r in rows_clean), page=pg), ln))
                     continue
                 continuation = bool(prev_table and prev_table["page"] == pg - 1 and ln["top"] < 150)
                 if len(rows_clean) == 1 and len(rows_clean[0]) > 2:   # header row left alone at the bottom of a page
@@ -222,8 +238,8 @@ def parse_pdf(path: str | Path, llm=None, classify_llm: bool = True) -> ParsedDo
                     last_header = rows_clean[0]
                 prev_table = ln
                 for txt, extra in _table_units(rows):
-                    units.append(DocUnit(len(units), "table", txt, None,
-                                         cur_heading.text if cur_heading else None, pg, extra))
+                    units.append(_grow(DocUnit(len(units), "table", txt, None,
+                                               cur_heading.text if cur_heading else None, pg, extra), ln))
                 stats_tables += 1
                 continue
             text = ln["text"]
@@ -245,29 +261,31 @@ def parse_pdf(path: str | Path, llm=None, classify_llm: bool = True) -> ParsedDo
             if RE_SIGN.search(text):
                 if cur is None or cur.unit_type != "signature":
                     flush()
-                    cur = DocUnit(len(units), "signature", text, None, None, pg)
+                    cur = _grow(DocUnit(len(units), "signature", text, None, None, pg), ln)
                 else:
                     cur.text += "\n" + text
+                    _grow(cur, ln)
                 continue
             if m and is_big_bold:
                 flush()
-                cur_heading = DocUnit(len(units), "heading", text, m.group(1), None, pg)
+                cur_heading = _grow(DocUnit(len(units), "heading", text, m.group(1), None, pg), ln)
                 units.append(cur_heading)
                 continue
             if m and not ln["bold"] and "." in m.group(1) or (m and not ln["bold"] and m.group(1).isdigit() and text[len(m.group(1))] == "."):
                 flush()
-                cur = DocUnit(len(units), "clause", m.group(2), m.group(1),
-                              cur_heading.text if cur_heading else None, pg)
+                cur = _grow(DocUnit(len(units), "clause", m.group(2), m.group(1),
+                                    cur_heading.text if cur_heading else None, pg), ln)
                 continue
             if cur is None or cur.unit_type in ("heading", "signature"):
                 flush()
-                cur = DocUnit(len(units), "paragraph", text, cur_heading.section_no if cur_heading else None,
-                              cur_heading.text if cur_heading else None, pg)
+                cur = _grow(DocUnit(len(units), "paragraph", text, cur_heading.section_no if cur_heading else None,
+                                    cur_heading.text if cur_heading else None, pg), ln)
                 continue
             if RE_BULLET.match(text):
                 cur.text += "\n" + text
             else:
                 cur.text += " " + text
+            _grow(cur, ln)
     flush()
     for i, u in enumerate(units):
         u.order = i

@@ -25,6 +25,7 @@ import networkx as nx
 
 from kg.config import now_iso
 from kg.store.base import GraphStore
+from kg.store.v2tables import SCHEMA_V2, V2Mixin
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -129,12 +130,13 @@ def _valid(row_from: str | None, row_to: str | None, date: str | None) -> bool:
     return (row_from is None or row_from <= date) and (row_to is None or date < row_to)
 
 
-class SQLiteStore(GraphStore):
+class SQLiteStore(V2Mixin, GraphStore):
     def __init__(self, path):
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self._tx() as con:
             con.executescript(SCHEMA)
+            con.executescript(SCHEMA_V2)
             for table, cols in MIGRATIONS.items():
                 have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
                 for col, ddl in cols.items():
@@ -226,9 +228,27 @@ class SQLiteStore(GraphStore):
         self._version += 1
         return len(ids)
 
+    def delete_edge_ids(self, ids: Iterable[str]) -> int:
+        ids = [(i,) for i in ids]
+        with self._tx() as con:
+            con.executemany("DELETE FROM edges WHERE id=?", ids)
+        self._version += 1
+        return len(ids)
+
+    def get_nodes(self, ids: Iterable[str]) -> dict[str, dict]:
+        """{id: node} for the ids that exist."""
+        ids = list(dict.fromkeys(ids))
+        out: dict[str, dict] = {}
+        with self._tx() as con:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                for r in con.execute(f"SELECT * FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                    out[r["id"]] = _node(r)
+        return out
+
     def edges(self, type: str | None = None) -> list[dict]:
         """All edges (optionally of one type) as dicts {src, dst, type, props, valid_from, valid_to}."""
-        sql, args = "SELECT src, dst, type, props, valid_from, valid_to FROM edges", []
+        sql, args = "SELECT id, src, dst, type, props, valid_from, valid_to FROM edges", []
         if type:
             sql += " WHERE type=?"
             args.append(type)

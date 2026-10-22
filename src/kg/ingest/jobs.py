@@ -8,8 +8,9 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
-from kg.ids import act_id, amend_id, norm_sup, path_sort_key, prov_id, pv_id
+from kg.ids import act_id, amend_id, display_path, norm_sup, path_sort_key, prov_id, pv_id
 from kg.ingest.act_parser import parse_act_html
+from kg.ingest.titles import heading_at, make_index_text, provision_title
 from kg.ingest.amendment_parser import (extract_amendment, interpret_all, llm_fallback)
 from kg.ingest.consolidate import VersionedAct, instr_from_dict, instr_to_dict
 
@@ -36,22 +37,32 @@ def amendment_edges(cfg, base_doc: str) -> list[dict]:
 def write_act_graph(store, doc_id: str, va: VersionedAct, act_props: dict):
     """(Re)write Act, Provision, ProvisionVersion nodes and HAS_PROVISION / VERSION_OF / UPDATES / AMENDED_BY edges."""
     store.purge_act(doc_id)
+    act_short = (act_props or {}).get("short")
     nodes, edges = [(act_id(doc_id), "Act", act_props, None, None)], []
     for order, path in enumerate(sorted(va.versions, key=path_sort_key)):
         vs = va.versions[path]
         if not vs:
             continue
         pid = prov_id(doc_id, path)
-        nodes.append((pid, "Provision", {"act": doc_id, "path": path, "level": vs[0].level, "order": order},
-                      vs[0].valid_from, None))
+        newest = next((x for x in reversed(vs) if x.status == "active"), vs[-1])
+        nodes.append((pid, "Provision", {
+            "act": doc_id, "path": path, "level": vs[0].level, "order": order, "placeholder": False,
+            "display": display_path(path),
+            "title": provision_title(path, newest.label, newest.text, heading_at(va.versions, path, newest.valid_from))},
+            vs[0].valid_from, None))
         edges.append((act_id(doc_id), pid, "HAS_PROVISION", {"order": order}, None, None))
         prev = None
         for v in vs:
             vid = pv_id(doc_id, path, v.valid_from)
+            art_heading = heading_at(va.versions, path, v.valid_from)
             nodes.append((vid, "ProvisionVersion", {
                 "act": doc_id, "path": path, "text": v.text, "label": v.label, "heading": v.heading,
                 "chapter": v.chapter, "status": v.status, "source": v.source, "change_type": v.change_type,
-                "level": v.level, "amendment_notes": v.amendment_notes, "order": order}, v.valid_from, v.valid_to))
+                "level": v.level, "amendment_notes": v.amendment_notes, "order": order,
+                "article_title": art_heading, "act_short": act_short, "display": display_path(path),
+                "title": provision_title(path, v.label, v.text, art_heading),
+                "index_text": make_index_text(act_short, path, art_heading, v.label, v.text)},
+                v.valid_from, v.valid_to))
             edges.append((vid, pid, "VERSION_OF", {}, None, None))
             if prev is not None:
                 edges.append((vid, prev, "UPDATES", {"change_type": v.change_type}, v.valid_from, None))
@@ -213,6 +224,23 @@ RE_EXT_DATE = re.compile(r"(\d{4})\s*წლის\s*(\d{1,2})\s*([ა-ჰ]+)")
 RE_EXT_LAW = re.compile(r"(?:„(?P<t1>[^„“”]{8,200})[“”]\s*საქართველოს\s+(?:ორგანულ\w*\s+)?კანონ\w*|კანონ\w*\s+„(?P<t2>[^„“”]{8,200})[“”])")
 
 
+def _ext_tail_segments(tail: str) -> list[str] | None:
+    """Article / paragraph named right after an external law ("... კანონის მე-5 მუხლის მე-2 პუნქტი")."""
+    from kg.ids import join_path
+    m = RE_ART_REF.match(tail.strip(" ,"))
+    if not m or (m.group("scope") or "").strip():
+        return None
+    art = _seg_from_ord(m.group("art"), "art")
+    if not art:
+        return None
+    segs = [art]
+    if m.group("para"):
+        para = _seg_from_ord(m.group("para"), "para")
+        if para:
+            segs.append(para)
+    return segs
+
+
 def _seg_from_ord(token: str, kind: str) -> str | None:
     from kg.ids import parse_ordinal, art_seg, para_seg
     o = parse_ordinal(token)
@@ -223,6 +251,7 @@ def _seg_from_ord(token: str, kind: str) -> str | None:
 
 def extract_refs(cfg, store, run) -> dict:
     from kg.ids import sub_seg, join_path
+    from kg.ingest.texttools import level_of
     stats = Counter()
     acts = {n["id"].split(":")[1]: n for n in store.nodes("Act")}
     by_number = {}
@@ -251,6 +280,29 @@ def extract_refs(cfg, store, run) -> dict:
             stats[match_type] += 1
             rows_csv[(act, doc, title, match_type)] = rows_csv.get((act, doc, title, match_type), 0) + 1
 
+        def link_internal(act_: str, src_path: str, wanted: str, ref_text: str):
+            """Edge to the EXACT referenced provision. If that path does not exist in the act, a placeholder
+            Provision (no text) is created and ``resolved_to`` names the nearest existing ancestor."""
+            have = prov_paths.get(act_, set())
+            near = wanted
+            while near and near not in have:
+                near = "/".join(near.split("/")[:-1])
+            if not near:
+                return
+            anchor = near                                # existing node we resolve to (== wanted when it exists)
+            if anchor == src_path or src_path.startswith(anchor + "/"):
+                return                                   # reference to itself / its own ancestor
+            if wanted == near:
+                add_edge(prov_id(act_, wanted), ref_text, "regex", "internal", wanted, act_)
+                return
+            pid = prov_id(act_, wanted)
+            node_rows.append((pid, "Provision", {
+                "act": act_, "path": wanted, "level": level_of(wanted), "order": None, "placeholder": True,
+                "display": display_path(wanted), "title": display_path(wanted) + " (ტექსტი მიუწვდომელია)"},
+                None, None))
+            add_edge(pid, ref_text, "regex", "internal_placeholder", wanted, act_)
+            edge_rows[-1][3]["resolved_to"] = prov_id(act_, near)
+
         # --- external acts by order number
         for m in RE_EXT_NO.finditer(text):
             num = m.group(1)
@@ -268,12 +320,22 @@ def extract_refs(cfg, store, run) -> dict:
                 key = f"ext:{num}" + (f"@{year}" if year else "")
                 node_rows.append((key, "ExternalAct", {"number": num, "year": year, "title": title}, None, None))
                 add_edge(key, m.group(0), "regex", "external_number", title)
-        # --- external laws by title
+        # --- external laws by title (+ the article / paragraph named right after the law, as a placeholder node)
         for m in RE_EXT_LAW.finditer(text):
             title = (m.group("t1") or m.group("t2") or "").strip()
             key = "ext:law:" + re.sub(r"\s+", " ", title.lower())
             node_rows.append((key, "ExternalAct", {"title": title, "kind": "law"}, None, None))
-            add_edge(key, m.group(0)[:120], "regex", "external_title", title)
+            segs_ext = _ext_tail_segments(text[m.end(): m.end() + 140])
+            if segs_ext:
+                epath = join_path(*segs_ext)
+                ekey = f"{key}/{epath}"
+                node_rows.append((ekey, "ExternalProvision", {
+                    "act_key": key, "path": epath, "placeholder": True, "display": display_path(epath),
+                    "title": f"{title} › {display_path(epath)}"}, None, None))
+                edge_rows.append((ekey, key, "PART_OF", {}, None, None))
+                add_edge(ekey, m.group(0)[:120], "regex", "external_provision", title)
+            else:
+                add_edge(key, m.group(0)[:120], "regex", "external_title", title)
             taken.append((m.start(), m.end() + 100))
         # --- internal article / paragraph refs
         for m in RE_ART_REF.finditer(text):
@@ -291,21 +353,13 @@ def extract_refs(cfg, store, run) -> dict:
             if m.group("sub"):
                 a, _, b = m.group("sub").partition(".")
                 segs.append(sub_seg(a, None, b or None))
-            target = join_path(*segs)
-            while target and target not in prov_paths.get(act, set()):
-                target = "/".join(target.split("/")[:-1])
-            if target and target != path and not path.startswith(target + "/"):
-                add_edge(prov_id(act, target), m.group(0), "regex", "internal", f"{target}", act)
+            link_internal(act, path, join_path(*segs), m.group(0))
         for m in RE_REL_ART.finditer(text):
             segs = [cur_art, _seg_from_ord(m.group("para"), "para")]
             if m.group("sub"):
                 a, _, b = m.group("sub").partition(".")
                 segs.append(sub_seg(a, None, b or None))
-            target = join_path(*[s for s in segs if s])
-            while target and target not in prov_paths.get(act, set()):
-                target = "/".join(target.split("/")[:-1])
-            if target and target != path and not path.startswith(target + "/"):
-                add_edge(prov_id(act, target), m.group(0), "regex", "internal", f"{target}", act)
+            link_internal(act, path, join_path(*[s for s in segs if s]), m.group(0))
     if node_rows:
         store.upsert_nodes(node_rows)
     store.upsert_edges(edge_rows)

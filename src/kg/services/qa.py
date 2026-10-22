@@ -33,7 +33,9 @@ def _items(store, as_of: str, act: str | None) -> list[dict]:
             continue
         if act and str(p["act"]) != str(act):
             continue
-        out.append({"id": n["id"], "text": f"{p.get('heading') or ''} {p['text']}".strip(), "body": p["text"],
+        # index_text = act short name › article number and title › path, then label and text (KG v2 plan 5.1)
+        out.append({"id": n["id"], "text": p.get("index_text") or f"{p.get('heading') or ''} {p['text']}".strip(),
+                    "body": p["text"],
                     "act": str(p["act"]), "path": p["path"], "heading": p.get("heading"),
                     "valid_from": n["valid_from"]})
     return out
