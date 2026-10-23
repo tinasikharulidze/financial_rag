@@ -245,10 +245,13 @@ def parse_pdf(path: str | Path, llm=None, classify_llm: bool = True) -> ParsedDo
             text = ln["text"]
             if not text:
                 continue
-            is_big_bold = ln["bold"] and ln["size"] >= body + 0.4
             m = RE_HEADING_NUM.match(text)
             if m and not _is_section_no(m.group(1)):
                 m = None
+            # a section heading: bold and larger than the body text, or (documents that set headings in the body
+            # size, e.g. D12-D14) a bold top-level number "1. Title" at least as large as the body text
+            is_big_bold = ln["bold"] and (ln["size"] >= body + 0.4 or
+                                          bool(m and m.group(1).isdigit() and ln["size"] >= body - 0.1))
             if cover and not (m and is_big_bold):
                 if company_hint and text.strip() == company_hint:
                     continue

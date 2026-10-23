@@ -51,8 +51,31 @@ def _system(path: Path, cfg) -> tuple[str, str]:
     return text.replace("{entity_types}", ", ".join(cfg.get("entity_types") or [cfg.get("entity_type")])), version
 
 
-def _chunks(items: list, size: int) -> list[list]:
-    return [items[i:i + size] for i in range(0, len(items), size)]
+def _chunks(items: list, size: int, max_chars: int | None = None) -> list[list]:
+    """Batches of ``size`` items. With ``max_chars`` a batch whose units' text is longer than that is split further
+    (a long unit, e.g. a list of 20 eligibility criteria, then goes alone: three such units in one request produced
+    an answer so long that the request ran past its timeout every time). Batches under the limit stay as they were,
+    so answers stored for them are reused."""
+    batches = [items[i:i + size] for i in range(0, len(items), size)]
+    if not max_chars:
+        return batches
+
+    def chars(it) -> int:
+        return len(getattr(it[0] if isinstance(it, tuple) else it, "text_for_llm", "") or "")
+    out = []
+    for b in batches:
+        if sum(chars(it) for it in b) <= max_chars:
+            out.append(b)
+            continue
+        cur, n = [], 0
+        for it in b:
+            if cur and n + chars(it) > max_chars:
+                out.append(cur)
+                cur, n = [], 0
+            cur.append(it)
+            n += chars(it)
+        out.append(cur)
+    return out
 
 
 # ===================================================================================================== validation
@@ -351,7 +374,7 @@ def _run_act(cfg, store, run, llm, act_doc: str, force: bool, retry_invalid: boo
                 old = [oid for oid in g.open.get(u.unit_path, [])]
                 (changed if prev is not None and old else fresh).append((u, prev, old))
             amend_cache: dict[str, dict | None] = {}
-            for batch in _chunks(fresh, size):
+            for batch in _chunks(fresh, size, cfg.get_in("extraction.batch_max_chars", None)):
                 _do_extract(cfg, store, run, llm, act_doc, date, batch, builder, g, sys_x, ver_x, stats,
                             amend_cache, force, retry_invalid)
             for batch in _chunks(changed, dsize):
@@ -410,6 +433,32 @@ def _do_extract(cfg, store, run, llm, act_doc, date, batch, builder, g, system, 
             stats["non_obligation_units"] += 1
 
 
+def _too_big(llm, purpose: str, messages: list[dict], share: float = 0.85) -> bool:
+    """Would the request (plus room for a retry) exceed the model's input tokens per minute?"""
+    try:
+        model = llm.models_for(purpose)[0]
+        tpm = llm.options_for(model, purpose).get("tokens_per_minute")
+    except Exception:  # noqa: BLE001 - a test double without these: never compact
+        return False
+    return bool(tpm) and llm.estimate_tokens(messages) > tpm * share
+
+
+def _only_changed_members(ctx: dict, u: Unit, prev: Unit | None):
+    """Keep only the changed sub-points of a unit (and of its previous wording) in a diff context."""
+    if prev is None or "previous" not in ctx:
+        return
+    old, new = dict(prev.members), dict(u.members)
+    changed = [m for m in dict.fromkeys(list(old) + list(new)) if old.get(m) != new.get(m)]
+
+    def lines(members: dict) -> str:
+        return "\n".join(t if m == u.unit_path else f"[{m}] {t}" for m, t in members.items()
+                         if m in changed or m == u.unit_path)
+    ctx["unit"]["text"] = lines(new)
+    ctx["previous"]["text"] = lines(old)
+    ctx["note"] = ("Only the sub-points that changed are shown (in both wordings); every other sub-point of this "
+                   "unit is unchanged, so obligations based on them are 'unchanged'.")
+
+
 def _do_diff(cfg, store, run, llm, act_doc, date, batch, builder, g, system, version, stats, amend_cache, force,
              retry_invalid):
     ctxs, old_ids = [], {}
@@ -419,9 +468,16 @@ def _do_diff(cfg, store, run, llm, act_doc, date, batch, builder, g, system, ver
         ctx["amendment"] = {"number": (amendment or {}).get("number"), "effective_date": date}
         ctxs.append(ctx)
         old_ids[u.uid] = set(old)
+    messages = system_user(system, "INPUT:\n" + json.dumps(ctxs, ensure_ascii=False))
+    if _too_big(llm, "amend_diff", messages):
+        # e.g. a definitions paragraph with 30 sub-points: old + new wording do not fit into one request. Only the
+        # sub-points that changed are sent (the request would otherwise be refused and the old obligations kept)
+        for (u, prev, _old), ctx in zip(batch, ctxs):
+            _only_changed_members(ctx, u, prev)
+        messages = system_user(system, "INPUT:\n" + json.dumps(ctxs, ensure_ascii=False))
+        run.log("diff_compacted", act=act_doc, date=date, units=[c["id"] for c in ctxs])
     ctx_by_id = {c["id"]: c for c in ctxs}
     inputs = {"entity_types": cfg.get("entity_types"), "contexts": ctxs}
-    messages = system_user(system, "INPUT:\n" + json.dumps(ctxs, ensure_ascii=False))
     subject = f"diff:{act_doc}@{date}:" + hashlib.sha1("|".join(c["id"] for c in ctxs).encode()).hexdigest()[:10]
     res = run_step(store, llm, "amend_diff", subject, inputs, messages, DiffBatch, version,
                    validate=make_diff_validator(cfg, store, ctx_by_id, old_ids), force=force,

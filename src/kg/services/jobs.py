@@ -130,8 +130,10 @@ def _merge(cfg, store, run, llm, version_id: str) -> dict:
         return {"error": str(exc)[:300]}
 
 
-def run_check(cfg, store, run, llm, version_id: str, actor: dict) -> dict:
-    """The check itself (called inside the background process): map -> propose -> sync tasks."""
+def run_check(cfg, store, run, llm, version_id: str, actor: dict, force_map: bool = False) -> dict:
+    """The check itself (called inside the background process): map -> propose -> sync tasks.
+    ``force_map``: ask relevance, location and coverage again even when answers are stored (e.g. after switching
+    thinking on); user decisions are kept."""
     from kg.llm import BudgetExhausted, LLMRequestRejected, LLMUnavailable
     from kg.mapping.pipeline import map_document
     from kg.mapping.proposals import propose_document
@@ -142,7 +144,7 @@ def run_check(cfg, store, run, llm, version_id: str, actor: dict) -> dict:
                 (version_id, "queued", actor["id"], now_iso()))
     _set(store, version_id, status="running", pid=os.getpid(), run_id=getattr(run, "id", None), message=None)
     try:
-        out = {"map": map_document(cfg, store, run, llm, version_id),
+        out = {"map": map_document(cfg, store, run, llm, version_id, force=force_map),
                "propose": propose_document(cfg, store, run, llm, version_id),
                "tasks": sync_tasks(cfg, store, run, version_id, actor["id"])}
         out["merge"] = _merge(cfg, store, run, llm, version_id)
@@ -209,7 +211,8 @@ def _report(path: Path, results: dict, started: str):
 
 
 def check_all(cfg, store, actor: dict, versions: list[str] | None = None, *, skip=(), make_drafts: bool = False,
-              auto_confirm: bool = False, make_llm=None, sleep=None, log=print, waits: dict | None = None) -> dict:
+              auto_confirm: bool = False, make_llm=None, sleep=None, log=print, waits: dict | None = None,
+              force_map: bool = False) -> dict:
     """Check many document versions one after the other, unattended (overnight).
 
     Nothing stops the whole run: every finished step is stored, so a document whose check was interrupted is simply
@@ -254,7 +257,7 @@ def check_all(cfg, store, actor: dict, versions: list[str] | None = None, *, ski
                     llm = make_llm(cfg, store, run.id)
                     llm.max_live = None                      # the per-process safety valve is for interactive use
                     llm.tolerate_rejected = True
-                    done_before = (get_job(store, v) or {}).get("status") == "done"
+                    done_before = (get_job(store, v) or {}).get("status") == "done" and not force_map
                     if done_before:
                         log(f"[{v}] already checked: merge step only")
                         merge_pending(cfg, store, run, llm, v)
@@ -269,7 +272,8 @@ def check_all(cfg, store, actor: dict, versions: list[str] | None = None, *, ski
                             confirm_profile(store, actor, v)
                             log(f"[{v}] profile built and auto-confirmed: {get_profile(store, v)['doc_type']}")
                         log(f"[{v}] check: attempt {attempts}")
-                        run_check(cfg, store, run, llm, v, actor)
+                        # forced only on the first attempt: a repeated attempt reuses what the forced one stored
+                        run_check(cfg, store, run, llm, v, actor, force_map=force_map and attempts == 1)
                 return {"status": "done", "attempts": attempts, "message": message,
                         "minutes": round((time.time() - t0) / 60)}
             except LLMUnavailable as exc:

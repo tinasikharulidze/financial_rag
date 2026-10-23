@@ -115,3 +115,72 @@ def test_thinking_request_that_hangs_is_asked_without_thinking(kg, monkeypatch):
         llm._request("triage", [{"role": "user", "content": "x"}], 100, True, "k")
     assert seen == ["high", "minimal"]
     assert store.q1("SELECT 1 FROM llm_calls WHERE error LIKE 'thinking_off%'")
+
+
+def test_run_all_extracts_uploads_and_checks(kg, tmp_path):
+    from kg.services.directions import get_directions
+    from kg.services.runall import acts_without_obligations, run_all
+    cfg, store = kg
+    fake = FakeGemini()
+    seed_demo(cfg, store, with_docs=False)
+    owner = accounts.authenticate(store, "bank@demo.ge", "demo1234")
+    assert "4964423" in acts_without_obligations(cfg, store)
+    pdf = sorted(cfg.path("company_docs").glob("D9_*.pdf"))[0]
+    flaky = Flaky(fake, {"extract_obligations": [HTTP(503, "503 UNAVAILABLE")] * 6})
+    slept = []
+    out = run_all(cfg, store, owner, acts=["4964423"], uploads=[(str(pdf), "model_risk")], make_llm=make(flaky),
+                  sleep=slept.append, log=lambda m: None)
+    assert out["acts"] == {"4964423": "done"} and 600 in slept
+    assert store.q1("SELECT COUNT(*) n FROM nodes WHERE type='Obligation'")["n"] > 0
+    vid = out["uploads"][0]["version_id"]
+    fam = store.q1("SELECT family_id FROM document_versions WHERE id=?", (vid,))["family_id"]
+    assert get_directions(store)[fam] == "model_risk" and out["check"] == {vid: "done"}
+    assert (cfg.path("runs") / "run-all-report.md").exists()
+    assert "4964423" not in acts_without_obligations(cfg, store)
+
+
+def test_run_all_without_extraction(kg):
+    from kg.services.runall import run_all
+    cfg, store = kg
+    seed_demo(cfg, store, with_docs=False)
+    owner = accounts.authenticate(store, "bank@demo.ge", "demo1234")
+    pdf = sorted(cfg.path("company_docs").glob("D9_*.pdf"))[0]
+    out = run_all(cfg, store, owner, acts=[], uploads=[(str(pdf), "model_risk")], check=False,
+                  make_llm=make(FakeGemini()), sleep=lambda s: None, log=lambda m: None)
+    assert out["acts"] == {} and out["uploads"][0]["version_id"]
+    assert store.q1("SELECT COUNT(*) n FROM nodes WHERE type='Obligation'")["n"] == 0      # nothing extracted
+
+
+def test_discard_then_upload_again_checks_again(kg):
+    from kg.services import documents as D
+    from kg.services.jobs import get_job
+    cfg, store = kg
+    seed_demo(cfg, store, with_docs=False)
+    owner = accounts.authenticate(store, "bank@demo.ge", "demo1234")
+    pdf = sorted(cfg.path("company_docs").glob("D9_*.pdf"))[0]
+    v = D.upload(cfg, store, owner, pdf.read_bytes(), pdf.name)["version_id"]
+    store.x("INSERT INTO check_jobs(version_id,status,started_at) VALUES(?,?,?)", (v, "done", "x")) \
+        if get_job(store, v) is None else None
+    D.discard_draft(store, owner, v, cfg)
+    assert get_job(store, v) is None                      # a new upload of the same file is checked again
+    assert D.upload(cfg, store, owner, pdf.read_bytes(), pdf.name)["status"] == "ok"
+
+
+def test_force_mapping_asks_relevance_and_coverage_again(env):
+    cfg, store, docs, owner, fake = env
+    v = [d for d in docs if "POL-RM-014" not in d][0]
+
+    def with_options(opts):
+        def f(cfg_, store_, rid):
+            llm = make(fake)(cfg_, store_, rid)
+            llm.step_options = opts
+            return llm
+        return f
+    off, on = with_options({}), with_options({"triage": {"thinking_level": "high"}, "judge": {"thinking_level": "high"}})
+    quiet = dict(sleep=lambda s: None, log=lambda m: None)
+    check_all(cfg, store, owner, [v], auto_confirm=True, make_llm=off, **quiet)          # first check: thinking off
+    t0, j0 = fake.calls["triage"], fake.calls["judge"]
+    check_all(cfg, store, owner, [v], make_llm=on, **quiet)
+    assert (fake.calls["triage"], fake.calls["judge"]) == (t0, j0)            # done: nothing asked again
+    out = check_all(cfg, store, owner, [v], make_llm=on, force_map=True, **quiet)
+    assert out["results"][v] == "done" and fake.calls["triage"] > t0 and fake.calls["judge"] > j0

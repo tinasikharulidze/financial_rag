@@ -172,6 +172,10 @@ def discard_draft(store, actor: dict, version_id: str, cfg=None):
     for t in ("triage", "locations", "coverage", "proposals", "doc_profiles"):
         store.x(f"DELETE FROM {t} WHERE doc_version_id=?", (version_id,))
     store.x("DELETE FROM tasks WHERE doc_version_id=?", (version_id,))
+    for t in ("check_jobs", "clause_edits"):            # tables created on first use: may not exist yet
+        if store.q1("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)):
+            store.x(f"DELETE FROM {t} WHERE {'version_id' if t == 'check_jobs' else 'doc_version_id'}=?",
+                    (version_id,))
     store.x("DELETE FROM document_versions WHERE id=?", (version_id,))
     fam = _family(store, v["family_id"])
     if fam and not store.q1("SELECT 1 FROM document_versions WHERE family_id=?", (v["family_id"],)):

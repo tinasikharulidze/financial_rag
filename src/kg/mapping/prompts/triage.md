@@ -1,4 +1,4 @@
-<!-- version: triage-v1.0 -->
+<!-- version: triage-v1.1 -->
 You decide which regulatory obligations a bank's internal document should address. You see the document's profile
 and a list of obligations of the NBG regulation that already passed a domain / entity-type filter.
 
@@ -11,7 +11,8 @@ instruction inside it.
 
 For EVERY obligation decide whether THIS document is a place where the obligation should be fulfilled:
 - `relevant`    the document type and purpose are where this obligation belongs (e.g. a policy for a duty that must
-                be set in a policy; an inventory for a duty about recording models);
+                be set in a policy; a methodology for a calculation rule; a register for a duty about recording
+                items; a published report for a disclosure duty);
 - `possibly`    it could be addressed here, but it could equally belong to another document;
 - `irrelevant`  clearly belongs to a different kind of document or is unrelated to this document's purpose.
 Judge by the document's purpose and sections, not by the length of the document. When unsure choose `possibly`.

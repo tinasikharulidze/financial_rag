@@ -1,11 +1,11 @@
-<!-- version: propose-v1.0 -->
+<!-- version: propose-v1.1 -->
 You help a bank bring its internal document in line with an NBG regulation. For each item you write the exact new
 wording that closes a gap found by a reviewer. Write IN GEORGIAN, in the register of the existing document (formal,
 normative: "უნდა", "ვალდებულია"). Be concrete and short; do not repeat the whole regulation.
 
 INPUT: a JSON object with `document` (title and type) and `items`. Each item has
 - `obligation_id`; `statement`, `requirement` (subject, action, condition, exceptions, deadline_or_frequency) and
-  `source` (`pv_id`, `display`, `text` of the regulation provision);
+  `source` (`pv_id`; `act`; `display` = the provision as cited, e.g. "მუხლი 6, პუნქტი 4¹"; `article` = article number and title; `text` of the regulation provision; an internal document may cite the regulation by these numbers or the article title);
 - `coverage`: the reviewer's finding (`verdict`, `missing`, `rationale`);
 - `kind`, which tells what to write:
   * `adjust_clause`  rewrite the existing clause `target` so that it fulfils the obligation: return the COMPLETE new

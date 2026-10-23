@@ -11,9 +11,32 @@ from kg.mapping.coverage import COMPANY
 ART_LEVELS = ("critical", "high", "medium", "low")
 
 
+GOLD_COLUMNS = ("id", "document", "document_file", "document_section", "class", "regulation_version",
+                "regulation_article", "what_the_document_says", "requirement", "verbatim_quote_ka", "expected_fix")
+
+
+def _gold_files(cfg) -> list:
+    """``paths.gold_labels`` plus ``paths.gold_labels_extra`` (a list), e.g. the gold keys of other directions."""
+    files = [cfg.path("gold_labels")]
+    for extra in (cfg.get("paths") or {}).get("gold_labels_extra") or []:
+        from kg.config import REPO_ROOT
+        files.append(REPO_ROOT / extra)
+    return files
+
+
 def load_gold(cfg) -> list[dict]:
-    with open(cfg.path("gold_labels"), encoding="utf-8-sig", newline="") as fh:
-        rows = list(csv.DictReader(fh))
+    """All gold rows; files that write the column names without underscores (``documentfile``) are read too."""
+    rows = []
+    for path in _gold_files(cfg):
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            for r in csv.DictReader(fh):
+                for col in GOLD_COLUMNS:
+                    if col not in r and col.replace("_", "") in r:
+                        r[col] = r[col.replace("_", "")]
+                r["gold_file"] = path.name
+                rows.append(r)
     for r in rows:
         r["paths"] = parse_gold_articles(r["regulation_article"])
         r["tokens"] = section_tokens(r["document_section"])

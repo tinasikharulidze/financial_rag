@@ -83,10 +83,15 @@ def _base_date(cfg, doc_id: str, meta: dict) -> str:
 
 
 # ============================================================================ parse-acts
-def parse_acts(cfg, store, run) -> dict:
+def _selected(cfg, only) -> list:
+    """The configured acts, or only the given ones (``--act``): a rebuild of one act leaves the others untouched."""
+    keep = {str(a) for a in only} if only else None
+    return [(str(k), v) for k, v in cfg["acts"].items() if keep is None or str(k) in keep]
+
+
+def parse_acts(cfg, store, run, only=None) -> dict:
     summary = {}
-    for doc_id, ac in cfg["acts"].items():
-        doc_id = str(doc_id)
+    for doc_id, ac in _selected(cfg, only):
         html = (cfg.path("raw_html") / f"{doc_id}.html").read_text(encoding="utf-8")
         snapshot = ac["mode"] == "snapshot"
         pa = parse_act_html(html, doc_id, strip_notes=snapshot)
@@ -119,11 +124,10 @@ def toc_of(provisions: list[dict]) -> str:
     return "\n".join(f"{a}: {' '.join(ps)}" for a, ps in sorted(arts.items(), key=lambda kv: path_sort_key(kv[0])))
 
 
-def parse_amendments(cfg, store, run, llm=None, dry_run: bool = False) -> dict:
+def parse_amendments(cfg, store, run, llm=None, dry_run: bool = False, only=None) -> dict:
     out = {"instructions": 0, "rules": 0, "llm": 0, "unsupported": 0, "unresolved": 0, "fallback_needed": 0}
     docs = {str(r["doc_id"]): r for r in read_jsonl(cfg.path("amendment_docs"))}
-    for base, ac in cfg["acts"].items():
-        base = str(base)
+    for base, ac in _selected(cfg, only):
         snapshot = ac["mode"] == "snapshot"
         base_json = parsed_dir(cfg, "acts") / f"{base}.json"
         provisions = json.loads(base_json.read_text(encoding="utf-8"))["provisions"] if base_json.exists() else []
@@ -174,10 +178,9 @@ def parse_amendments(cfg, store, run, llm=None, dry_run: bool = False) -> dict:
 
 
 # ============================================================================ consolidate
-def consolidate(cfg, store, run) -> dict:
+def consolidate(cfg, store, run, only=None) -> dict:
     summary = {}
-    for base, ac in cfg["acts"].items():
-        base = str(base)
+    for base, ac in _selected(cfg, only):
         if ac["mode"] != "versioned":
             continue
         base_data = json.loads((parsed_dir(cfg, "acts") / f"{base}.json").read_text(encoding="utf-8"))
@@ -377,3 +380,57 @@ def extract_refs(cfg, store, run) -> dict:
             w.writerow([f"{src}.html", src, doc, title, mt])
     run.log("extract_refs", edges=len(edge_rows), **dict(stats))
     return dict(stats)
+
+
+# ============================================================================ fill-labels
+def fill_labels(cfg, store, run, only=None) -> dict:
+    """Add the readable labels of KG v2 (``display``, ``title``; on versions also ``article_title``, ``act_short``,
+    ``index_text``) to the provisions and provision versions that were written before that code existed.
+
+    IN PLACE: no node or edge is deleted (a rebuild would drop the IMPOSES edges of extracted obligations). The values
+    are the ones ``write_act_graph`` writes, so a filled act and a rebuilt act look the same. No LLM."""
+    from types import SimpleNamespace
+
+    from kg.ids import display_path
+    out = {}
+    for doc_id, ac in _selected(cfg, only):
+        short = (ac or {}).get("short")
+        pvs = [n for n in store.nodes("ProvisionVersion") if str(n["props"].get("act")) == doc_id]
+        versions: dict[str, list] = {}
+        for n in pvs:
+            p = n["props"]
+            versions.setdefault(p["path"], []).append(SimpleNamespace(
+                valid_from=n["valid_from"] or "", valid_to=n["valid_to"], heading=p.get("heading"),
+                text=p.get("text"), label=p.get("label"), status=p.get("status")))
+        for vs in versions.values():
+            vs.sort(key=lambda v: v.valid_from)
+        n_pv = n_prov = 0
+        for n in pvs:
+            p = dict(n["props"])
+            path, vf = p["path"], n["valid_from"] or ""
+            art_heading = heading_at(versions, path, vf)
+            new = {"article_title": art_heading, "act_short": short, "display": display_path(path),
+                   "title": provision_title(path, p.get("label"), p.get("text"), art_heading),
+                   "index_text": make_index_text(short, path, art_heading, p.get("label"), p.get("text"))}
+            if any(p.get(k) != v for k, v in new.items()):
+                p.update(new)
+                store.x("UPDATE nodes SET props=? WHERE id=?", (json.dumps(p, ensure_ascii=False), n["id"]))
+                n_pv += 1
+        for n in store.nodes("Provision"):
+            p = dict(n["props"])
+            if str(p.get("act")) != doc_id or p.get("placeholder"):
+                continue
+            vs = versions.get(p["path"]) or []
+            if not vs:
+                continue
+            newest = next((v for v in reversed(vs) if v.status == "active"), vs[-1])
+            new = {"display": display_path(p["path"]),
+                   "title": provision_title(p["path"], newest.label, newest.text,
+                                            heading_at(versions, p["path"], newest.valid_from))}
+            if any(p.get(k) != v for k, v in new.items()):
+                p.update(new)
+                store.x("UPDATE nodes SET props=? WHERE id=?", (json.dumps(p, ensure_ascii=False), n["id"]))
+                n_prov += 1
+        out[doc_id] = {"provisions_updated": n_prov, "versions_updated": n_pv}
+        run.log("fill_labels", doc_id=doc_id, **out[doc_id])
+    return out

@@ -57,7 +57,12 @@ def _para_path(n: int, sup: int | None) -> str:
 def parse_gold_articles(text: str) -> list[str]:
     """'Art. 6 para 4¹–4²; Art. 9¹' -> ['art6/p4.1', 'art6/p4.2', 'art9_1']  (paragraph level)."""
     out: list[str] = []
-    for part in re.split(r"\s*;\s*", text or ""):
+    # "Art. 3(2)", "Art. 2(1)(ო)", "Art. 7(7)-(8)" (paragraphs in brackets, sub-point letters after them) are read as
+    # "Art. 3 para 2", "Art. 2 para 1", "Art. 7 para 7–8"
+    text = re.sub(rf"Art\.\s*(\d+[{_SUPCLS}]*)\((\d+[{_SUPCLS}]*)\)(?:\([^)\d]*\))*(?:\s*[–-]\s*\((\d+[{_SUPCLS}]*)\))?",
+                  lambda m: f"Art. {m.group(1)} para {m.group(2)}" + (f"–{m.group(3)}" if m.group(3) else ""),
+                  text or "")
+    for part in re.split(r"\s*;\s*", text):
         m = re.match(rf"Art\.\s*(\d+[{_SUPCLS}]*)(?:\s*[–-]\s*(\d+[{_SUPCLS}]*))?(.*)$", part.strip())
         if not m:
             continue

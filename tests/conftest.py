@@ -56,6 +56,7 @@ def built(tmp_path_factory):
                         llm_cache=str(tmp / "data" / "cache"), eval_results=str(tmp / "eval"),
                         cross_references=str(tmp / "cross.csv"))
     cfg.path("data_dir").mkdir(parents=True)
+    cfg["obligation_acts"] = ["4964423"]                # the test suite is built around the model risk act
     cfg["llm"]["daily_request_limit"] = None            # tests use mock backends; no quota
     cfg["llm"]["max_requests_per_run"] = None           # the safety valve of configs/kg.yaml is for real runs
     cfg["llm"]["tokens_per_minute"] = None              # no pacing (real sleeps) against the fake model

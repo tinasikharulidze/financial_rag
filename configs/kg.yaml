@@ -7,6 +7,9 @@ paths:
   cross_references: matsne_data/graph_docs/cross_references.csv
   company_docs: model_risk_company_docs
   gold_labels: model_risk_company_docs/answer_key_gold_labels.csv
+  gold_labels_extra:            # more gold keys, read together with gold_labels
+    - other_directions_company_docs/D12-D14_gold_key_combined.csv   # D12-D14 (other directions)
+    - model_risk_company_docs/gold_additions_reviewed.csv           # 8 gaps found by the system, confirmed by review
   data_dir: data/kg
   db: data/kg/kg.sqlite
   runs: data/kg/runs
@@ -20,11 +23,12 @@ paths:
 acts:
   # doc_id -> mode.  "versioned": original text + amendments are replayed.  "snapshot": latest consolidated text only.
   # domains / applies_to: defaults for the obligations extracted from the act (the model may narrow them with a citation).
-  "2060636": {mode: versioned, short: "კაპიტალის ადეკვატურობა"}
-  "5679194": {mode: versioned, short: "მოსალოდნელი საკრედიტო ზარალი"}
-  "4822603": {mode: snapshot, snapshot_date: "2025-02-27", short: "ფიზიკური პირის დაკრედიტება"}
+  "2060636": {mode: versioned, short: "კაპიტალის ადეკვატურობა", domains: [capital_adequacy]}
+  "5679194": {mode: versioned, short: "მოსალოდნელი საკრედიტო ზარალი", domains: [expected_credit_loss]}
+  # 44/04: raw/4822603.html is the ORIGINAL publication (publication=0, 17/03/2020); the 7 amendments are replayed
+  "4822603": {mode: versioned, short: "ფიზიკური პირის დაკრედიტება", domains: [retail_lending]}
   "4964423": {mode: versioned, short: "მოდელის რისკის მართვა", domains: [model_risk], applies_to: [commercial_bank]}
-obligation_acts: ["4964423"]
+obligation_acts: ["4964423", "2060636", "5679194", "4822603"]
 entity_type: commercial_bank          # v1 default; v2 takes the entity type from the company profile
 entity_types: [commercial_bank, microbank, microfinance_organization, payment_service_provider, other]
 
@@ -56,9 +60,10 @@ llm:
     "gemma": {reasoning_effort: null, thinking_level: minimal, tokens_per_minute: 14000}
     # Gemma 4: a thinking budget is rejected (400) -> thinking_level (minimal = off); free tier: 16K input tokens/min,
     # paced at 14K for headroom
-  step_options:                # step -> options; everything else keeps the model's default (Gemma: minimal = off)
-    triage: {thinking_level: high, timeout_s: 300}   # relevance: thinking ON (good answers take 2-3 min; a hung request is cut at 5)
-    judge: {thinking_level: high, timeout_s: 300}    # coverage: thinking ON
+  step_options:                # step -> options; every other step uses the model's default (Gemma: minimal = off)
+    triage: {thinking_level: high, timeout_s: 300}   # relevance: thinking ON (as for the model risk documents)
+    judge: {thinking_level: high, timeout_s: 300}    # coverage: thinking ON (a hung request falls back to no thinking)
+    extract_obligations: {timeout_s: 900}            # long answers (a unit with 20 criteria = 15K+ tokens) need time
   thinking_off_after_timeout: true   # a thinking request that times out (or fails twice) is asked once more without
                                      # thinking: Gemma sometimes "thinks" past any timeout on the same input
   thinking_level: null         # default for every model (null = not sent)
@@ -77,7 +82,8 @@ llm:
 
 # ----------------------------------------------------------------------------------------------------------- steps
 extraction:
-  obligation_batch: 5           # extraction units per LLM call (v2 prompts are longer than v1)
+  obligation_batch: 3           # extraction units per LLM call (5 units of 44/04 = 10-12K tokens: too close to the 14K/min pacing)
+  batch_max_chars: 5000         # ... and at most this much unit text per request (long lists of criteria go alone)
   diff_batch: 1                 # changed units per amend-diff call (4 units = ~15K tokens: too big for Gemma's 16K/min)
   context_chars: 800            # cap per referenced provision in the context builder
   diff_on_reference_change: false   # also re-check units whose referenced provisions changed (more requests)

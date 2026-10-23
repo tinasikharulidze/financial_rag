@@ -74,7 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("parse-acts", "consolidate", "extract-refs", "coverage-alerts", "status", "migrate", "alerts"):
         sub.add_parser(name)
+    p = sub.add_parser("fill-labels", help="add display / title / index_text to provisions written before KG v2, "
+                                           "in place (nothing deleted; safe with extracted obligations; no LLM)")
+    p.add_argument("--act", action="append", help="only this act (repeatable); default: all acts")
     p = sub.add_parser("rebuild-graph", help="parse-acts + parse-amendments + consolidate + extract-refs (no LLM)")
+    p.add_argument("--act", action="append", help="rebuild only this act (repeatable); the others stay as they are")
+    p.add_argument("--llm-fallback", action="store_true", help="use the LLM for amendment instructions the rules miss")
     p = sub.add_parser("parse-amendments"); p.add_argument("--dry-run", action="store_true")
     p.add_argument("--llm-fallback", action="store_true", help="use the LLM for unresolved instructions")
     p = sub.add_parser("extract-obligations"); p.add_argument("--dry-run", action="store_true")
@@ -95,6 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--company-name"); p.add_argument("--entity-type"); p.add_argument("--join")
     p = sub.add_parser("upload"); p.add_argument("pdf"); p.add_argument("--as", dest="as_user", required=True)
     p.add_argument("--new-version-of", help="family id, e.g. bank-a/POL-RM-014"); p.add_argument("--replace", action="store_true")
+    p.add_argument("--direction", help="direction tag of the document (e.g. model_risk, capital_adequacy, "
+                                       "expected_credit_loss, retail_lending); a new version keeps its document's tag")
     p = sub.add_parser("profile"); p.add_argument("version"); p.add_argument("--as", dest="as_user")
     p.add_argument("--confirm", action="store_true", help="confirm the profile (needs --as)")
     p.add_argument("--domain", action="append"); p.add_argument("--force", action="store_true")
@@ -106,6 +113,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check", help="the check of one version (map -> propose -> sync tasks); the web app runs it "
                                      "in the background and shows its status")
     p.add_argument("version"); p.add_argument("--as", dest="as_user", required=True)
+    p = sub.add_parser("run-all", help="unattended: extract the obligations of new acts, upload documents with their "
+                                       "direction, check them; waits and continues on model errors "
+                                       "(runs/run-all-report.md)")
+    p.add_argument("--as", dest="as_user", required=True)
+    p.add_argument("--act", action="append", help="extract these acts (default: obligation acts without obligations)")
+    p.add_argument("--upload", action="append", default=[], metavar="PDF=DIRECTION",
+                   help="a document to upload and check, with its direction, e.g. "
+                        "other_directions_company_docs/D13_ECL_Methodology_MTH-RM-022.pdf=expected_credit_loss")
+    p.add_argument("--no-check", action="store_true", help="only extract / upload")
+    p.add_argument("--no-extract", action="store_true", help="skip the obligation extraction (only upload / check)")
+    p.add_argument("--force-mapping", action="store_true",
+                   help="ask relevance / location / coverage of the checked documents again")
     p = sub.add_parser("check-all", help="unattended check of many document versions (overnight): waits and "
                                          "continues on model errors, writes runs/check-all-report.md")
     p.add_argument("--as", dest="as_user", required=True)
@@ -113,6 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip", action="append", default=[], help="leave this version out (repeatable)")
     p.add_argument("--make-drafts", action="store_true", help="published versions become drafts (editable review)")
     p.add_argument("--auto-confirm", action="store_true", help="confirm the model's profile without review")
+    p.add_argument("--force-mapping", action="store_true",
+                   help="ask relevance / location / coverage again even when answers are stored")
     p = sub.add_parser("merge-proposals", help="merge (with the model) the clauses that several proposals change, "
                                                "so the analysis page shows one wording per clause")
     p.add_argument("version"); p.add_argument("--force", action="store_true")
@@ -127,6 +148,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--company")
     p = sub.add_parser("revise"); p.add_argument("version"); p.add_argument("--as", dest="as_user", required=True)
     p.add_argument("--all-proposals", action="store_true", help="include proposals of tasks that are not accepted")
+    p = sub.add_parser("discard", help="delete a DRAFT version with all its results (to upload it again)")
+    p.add_argument("version"); p.add_argument("--as", dest="as_user", required=True)
     p = sub.add_parser("publish"); p.add_argument("version"); p.add_argument("--as", dest="as_user", required=True)
     p.add_argument("--force", action="store_true")
     # --- legacy v1
@@ -185,13 +208,19 @@ def _run(args) -> int:
     if c == "extract-refs":
         from kg.ingest.jobs import extract_refs
         return _job(args, c, lambda cfg, s, run, llm: extract_refs(cfg, s, run))
+    if c == "fill-labels":
+        from kg.ingest.jobs import fill_labels
+        return _job(args, c, lambda cfg, s, run, llm: fill_labels(cfg, s, run, args.act or None))
     if c == "rebuild-graph":
         from kg.ingest.jobs import consolidate, extract_refs, parse_acts, parse_amendments
 
         def go(cfg, s, run, llm):
-            return {"parse_acts": parse_acts(cfg, s, run), "parse_amendments": parse_amendments(cfg, s, run, None, False),
-                    "consolidate": consolidate(cfg, s, run), "extract_refs": extract_refs(cfg, s, run)}
-        return _job(args, c, go)
+            only = args.act or None
+            return {"parse_acts": parse_acts(cfg, s, run, only),
+                    "parse_amendments": parse_amendments(cfg, s, run, llm, False, only),
+                    "consolidate": consolidate(cfg, s, run, only),
+                    "extract_refs": extract_refs(cfg, s, run)}        # cross-references of all acts (no LLM)
+        return _job(args, c, go, needs_llm=bool(args.llm_fallback))
     if c == "extract-obligations":
         if args.legacy:
             from kg.extract.obligations import extract_obligations
@@ -253,9 +282,15 @@ def _run(args) -> int:
         def go(cfg, s, run, llm):
             actor = _actor(s, args.as_user)
             data = Path(args.pdf).read_bytes()
-            return documents.upload(cfg, s, actor, data, Path(args.pdf).name,
-                                    mode="new_version" if args.new_version_of else "new_document",
-                                    family_id=args.new_version_of, version_policy="replace" if args.replace else "keep")
+            res = documents.upload(cfg, s, actor, data, Path(args.pdf).name,
+                                   mode="new_version" if args.new_version_of else "new_document",
+                                   family_id=args.new_version_of, version_policy="replace" if args.replace else "keep")
+            if args.direction and res.get("version_id"):
+                from kg.services.directions import set_direction
+                fam = s.q1("SELECT family_id FROM document_versions WHERE id=?", (res["version_id"],))
+                set_direction(s, actor, fam["family_id"], args.direction)
+                res = {**res, "direction": args.direction}
+            return res
         return _job(args, c, go)
     if c == "profile":
         from kg.company import profile as P
@@ -289,11 +324,30 @@ def _run(args) -> int:
             return {k: (v if not isinstance(v, dict) else {kk: vv for kk, vv in v.items()
                                                            if not isinstance(vv, (list, dict))}) for k, v in out.items()}
         return _job(args, c, go, needs_llm=True, params={"version": args.version})
+    if c == "discard":
+        from kg.services import documents as D
+        cfg, store = _ctx(args)
+        D.discard_draft(store, _actor(store, args.as_user), args.version, cfg)
+        _print({"discarded": args.version})
+        return 0
+    if c == "run-all":
+        from kg.services.runall import run_all
+        cfg, store = _ctx(args)
+        ups = []
+        for u in args.upload:
+            path, _, direction = u.rpartition("=") if "=" in u else (u, "", "")
+            ups.append((path or u, direction or None))
+        out = run_all(cfg, store, _actor(store, args.as_user), acts=[] if args.no_extract else args.act, uploads=ups,
+                      check=not args.no_check, force_map=args.force_mapping,
+                      log=lambda m: print(f"{__import__('kg.config', fromlist=['now_iso']).now_iso()} {m}", flush=True))
+        _print(out)
+        ok = all(v == "done" for v in out["acts"].values()) and all(v == "done" for v in (out["check"] or {}).values())
+        return 0 if ok else 1
     if c == "check-all":
         from kg.services.jobs import check_all
         cfg, store = _ctx(args)
         out = check_all(cfg, store, _actor(store, args.as_user), args.version, skip=args.skip,
-                        make_drafts=args.make_drafts, auto_confirm=args.auto_confirm,
+                        make_drafts=args.make_drafts, auto_confirm=args.auto_confirm, force_map=args.force_mapping,
                         log=lambda m: print(f"{__import__('kg.config', fromlist=['now_iso']).now_iso()} {m}",
                                             flush=True))
         _print(out)

@@ -76,6 +76,22 @@ class JudgeBatch(BaseModel):
 
 
 # ------------------------------------------------------------------------------------------------ validation
+UNDECIDED_TEXT = ("მოდელის პასუხის გამოყენება ვერ მოხერხდა (მაგ., მითითებული პუნქტი დოკუმენტში ვერ მოიძებნა); "
+                  "ვალდებულება შემდეგი შემოწმებისას ხელახლა შეფასდება.")
+
+
+def resolve_clause_id(cid: str, allowed: set[str]) -> str | None:
+    """The clause the model meant when it wrote an id slightly differently from the one it was given: without the
+    ``cl:`` prefix ("bank-a/X@1.0/2.2"), or only the end of the id ("2.2"). Only an unambiguous match is used."""
+    cid = (cid or "").strip().strip("[]`'\" ")
+    if cid in allowed:
+        return cid
+    if "cl:" + cid in allowed:
+        return "cl:" + cid
+    ends = [a for a in allowed if a.endswith("/" + cid)]
+    return ends[0] if len(ends) == 1 else None
+
+
 def make_validator(store, view: DocView, allowed: dict[str, set[str]], src_pvs: dict[str, set[str]],
                    rejected: dict[str, set[str]] | None = None):
     def validate(out: JudgeBatch) -> list[str]:
@@ -88,6 +104,10 @@ def make_validator(store, view: DocView, allowed: dict[str, set[str]], src_pvs: 
             probs: list[str] = []
             best: dict[str, JEdge] = {}
             for e in r.edges:
+                fixed = resolve_clause_id(e.clause_id, allowed[oid] | set((rejected or {}).get(oid, ())))
+                if fixed and fixed != e.clause_id:
+                    notes.append(f"note: {oid}: clause id '{e.clause_id}' read as '{fixed}'")
+                    e.clause_id = fixed
                 if e.clause_id in (rejected or {}).get(oid, ()):
                     continue                                   # the user said this clause does not cover it
                 if e.clause_id not in allowed[oid]:
@@ -160,7 +180,15 @@ def source_of(store, ob: dict) -> dict | None:
         return None
     its.sort(key=lambda it: (it["edge"]["valid_to"] is None, it["edge"]["valid_from"] or ""))
     p = its[-1]["node"]["props"]
-    return {"pv_id": its[-1]["node"]["id"], "display": p.get("display"), "text": (p.get("text") or "")[:900]}
+    from kg.ids import display_path
+    from kg.ingest.titles import article_display
+    # the article number and title as an internal document would cite them ("მუხლი 6. Model validation")
+    art = article_display(p.get("path") or "")
+    if p.get("article_title"):
+        art = f"{art}. {p['article_title']}"
+    return {"pv_id": its[-1]["node"]["id"], "act": p.get("act_short") or p.get("act"),
+            "display": p.get("display") or (display_path(p["path"]) if p.get("path") else None),
+            "article": art or None, "text": (p.get("text") or "")[:900]}
 
 
 def amendment_of(store, ob: dict) -> str | None:
@@ -188,7 +216,9 @@ def write_results(store, run, version_id: str, v_doc: str | None, batch: list[di
         amend = amendment_of(store, o) if cause == "amendment" else None
         ue = user.get(oid, [])
         if it is None or it.invalid:
-            verdict, missing, rationale, cites, invalid = "undecided", None, "; ".join(it.problems) if it else "", [], 1
+            # the technical problems stay in step_outputs.errors; the page shows a sentence a reader understands
+            rationale = UNDECIDED_TEXT + (f" ({len(it.problems)} " + "ტექნიკური შენიშვნა)" if it and it.problems else "")
+            verdict, missing, cites, invalid = "undecided", None, [], 1
             edges = []
         else:
             if it.verdict == "contradicts" and it.edges and not any(e.role == "contradicts" for e in it.edges):
