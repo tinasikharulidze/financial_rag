@@ -12,7 +12,7 @@ for _p in (_ROOT / "src", _ROOT / "app"):
         sys.path.insert(0, str(_p))
 
 import common  # noqa: E402
-import view_auth, view_board, view_company, view_docs, view_reg, view_regulator, view_review  # noqa: E402,E401
+import view_auth, view_board, view_chat, view_company, view_docs, view_reg, view_regulator, view_review  # noqa: E402,E401
 from i18n_ka import T  # noqa: E402
 
 st.set_page_config(page_title=T["title"], layout="wide")
@@ -78,8 +78,7 @@ def _lang_page():
 def _account_menu(store, user, pages: dict):
     """Top right, apart from the pages: who is logged in, the company profile, log out."""
     co = store.q1("SELECT name FROM companies WHERE id=?", (user["company_id"],)) if user["company_id"] else None
-    left, right = st.columns([5, 1.4], vertical_alignment="center")
-    left.title(T["title"])
+    _, right = st.columns([5, 1.4], vertical_alignment="center")       # no big page title: the menu is enough
     with right.popover(f"👤 {user['name']}", use_container_width=True):
         st.markdown(f"**{user['name']}**  \n{user['email']}" + (f"  \n{co['name']}" if co else
                                                                  f"  \n{T['type_regulator']}"))
@@ -122,7 +121,22 @@ def main():
         goto = first                                    # tests: a rerun keeps the previous page; switch explicitly
     if goto in pages and nav != pages[goto]:
         st.switch_page(pages[goto])
-    nav.run()
+    if not cfg.get_in("agent.enabled", True):
+        nav.run()
+    elif st.session_state.get("chat_open"):
+        # the chat panel is a column on the LEFT that pushes the layout (it does not overlay the page)
+        chat_col, main_col = st.columns([0.92, 3], gap="medium")      # the panel: ~23% of the width
+        with chat_col:
+            view_chat.render(cfg, store, user)
+        with main_col:
+            nav.run()
+    else:
+        # collapsed: only a slim bar on the left; one click expands it
+        rail_col, main_col = st.columns([1, 40], gap="small")
+        with rail_col:
+            view_chat.rail()
+        with main_col:
+            nav.run()
 
 
 main()

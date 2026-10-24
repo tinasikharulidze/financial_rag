@@ -13,6 +13,7 @@ wheels/
 .env
 
 matsne_data/*
+evaluation/chat/results/
 
 # src/document_scraper.py
 # src/page_scraper.py

@@ -28,7 +28,11 @@ def _default_ctx():
 
 def get_ctx():
     """(config, store). Tests put their own pair in ``st.session_state['_ctx']``."""
-    return st.session_state.get("_ctx") or _default_ctx()
+    ctx = st.session_state.get("_ctx") or _default_ctx()
+    import i18n_en
+    from i18n_lang import register_acts
+    register_acts(ctx[0].get("acts") if ctx[0] else None, i18n_en.DOMAIN)     # English names of the acts
+    return ctx
 
 
 def current_user(store) -> dict | None:
