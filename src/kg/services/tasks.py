@@ -47,6 +47,24 @@ def title_of(kind: str, ob: dict) -> str:
     return f"{KIND_LABEL.get(kind, kind)}: {st[:90]}" + ("…" if len(st) > 90 else "")
 
 
+def profile_type(store, version_id: str | None) -> str | None:
+    r = store.q1("SELECT doc_type FROM doc_profiles WHERE doc_version_id=?", (version_id,)) if version_id else None
+    return r["doc_type"] if r else None
+
+
+def doc_match_of(store, version_id: str | None, ob: dict | None, types: dict | None = None) -> bool:
+    """Ranking signal: the obligation names this document's type as the place it must be written."""
+    if ob is None:
+        return False
+    if types is not None:
+        if version_id not in types:
+            types[version_id] = profile_type(store, version_id)
+        dt = types[version_id]
+    else:
+        dt = profile_type(store, version_id)
+    return ranking.doc_type_match(ob["props"], dt)
+
+
 # ------------------------------------------------------------------------------------------------ sync
 def sync_tasks(cfg, store, run, version_id: str, actor_id: int | None = None, only: set[str] | None = None) -> dict:
     """Create / update the tasks of one document version from its proposals, coverage and triage rows."""
@@ -59,6 +77,7 @@ def sync_tasks(cfg, store, run, version_id: str, actor_id: int | None = None, on
     cov = {r["obligation_id"]: r for r in store.q("SELECT * FROM coverage WHERE doc_version_id=?", (version_id,))}
     rel = {r["obligation_id"]: r["relevance"] for r in store.q(
         "SELECT obligation_id, relevance FROM triage WHERE doc_version_id=?", (version_id,))}
+    dtype = profile_type(store, version_id)
     now = now_iso()
     current: set[str] = set()
     for p in store.q("SELECT * FROM proposals WHERE doc_version_id=? ORDER BY id", (version_id,)):
@@ -73,7 +92,7 @@ def sync_tasks(cfg, store, run, version_id: str, actor_id: int | None = None, on
             continue
         pr = ob["props"]
         sev = pr.get("severity")
-        sc = ranking.score(cfg, sev, c["verdict"], rel.get(oid))
+        sc = ranking.score(cfg, sev, c["verdict"], rel.get(oid), c["cause"], ranking.doc_type_match(pr, dtype))
         amend = c["cause"] == "amendment"
         fields = {"proposal_id": p["id"], "obligation_id": oid, "doc_version_id": version_id, "severity": sev,
                   "verdict": c["verdict"], "relevance": rel.get(oid), "cause": c["cause"],
@@ -142,11 +161,14 @@ def resolve_older_versions(store, v: dict, cov: dict, actor_id, only: set[str] |
 
 
 def rescore(cfg, store, company_id: str | None = None) -> int:
-    """Recompute score and priority of all tasks from the stored severity / verdict / relevance (no LLM)."""
+    """Recompute score and priority of all tasks from the stored verdict / relevance / cause (+ severity in the
+    formula mode) and the document-type signal (no LLM)."""
     n = 0
+    types: dict = {}
     for t in store.q("SELECT * FROM tasks" + (" WHERE company_id=?" if company_id else ""),
                      (company_id,) if company_id else ()):
-        sc = ranking.score(cfg, t["severity"], t["verdict"], t["relevance"])
+        dm = doc_match_of(store, t["doc_version_id"], store.get_node(t["obligation_id"]), types)
+        sc = ranking.score(cfg, t["severity"], t["verdict"], t["relevance"], t["cause"], dm)
         pr = ranking.priority(cfg, sc)
         if sc != t["score"] or pr != t["priority"]:
             store.x("UPDATE tasks SET score=?, priority=?, updated_at=? WHERE key=?", (sc, pr, now_iso(), t["key"]))
@@ -275,7 +297,8 @@ def explain_task(cfg, store, actor: dict, key: str) -> dict:
     decisions = store.q("SELECT d.*, u.name AS actor_name FROM user_decisions d LEFT JOIN users u ON u.id=d.actor "
                         "WHERE d.doc_version_id=? AND d.obligation_id=? ORDER BY d.id",
                         (t["doc_version_id"], t["obligation_id"]))
-    return {"task": t, "ranking": ranking.explain(cfg, t["severity"], t["verdict"], t["relevance"]),
+    dm = doc_match_of(store, t["doc_version_id"], store.get_node(t["obligation_id"]))
+    return {"task": t, "ranking": ranking.explain(cfg, t["severity"], t["verdict"], t["relevance"], t["cause"], dm),
             "coverage": cov, "triage": tri, "decisions": decisions,
             "step_outputs": {"coverage": (cov or {}).get("llm_output_id"), "triage": (tri or {}).get("llm_output_id")},
             "events": events_of(store, actor, key)}

@@ -1,0 +1,30 @@
+[
+  {
+    "finding_id": "doc:bank-a/MR-2022-Q1@1.0|obl:4964423/art8/p1#3@2021-01-01",
+    "review_in_scope": "yes",
+    "review_obligation_faithful": "yes",
+    "review_hallucination": "minor",
+    "review_unsupported_claims": "Second evidence item quotes an empty string („“) for §3.2.2 and claims 'management took corrective action' as evidence of being informed. The report itself, addressed to the CRO, the Models Committee and the Directorate (§7.1) and stating the data incident (§3.2.1) and the +3% management overlay (§3.2.2), arguably does inform decision-makers, so the 'partial' gap is weak. The rationale also ignores the decisive problem, which is unrestricted use.",
+    "review_correct_verdict": "contradicts",
+    "review_verdict_correct": "no",
+    "review_error_type": "evidence_missed",
+    "review_argument_quality": 2,
+    "review_proposal_alignment": 1,
+    "review_gold_reason_alignment": 2,
+    "review_comment": "The inform limb is plausibly met (§3.2.1 discloses „12,4%-მდე გაიზარდა“; §7.1 sends the report to the CRO, committee and directorate), while the same clause's second limb is violated by §3.2.2 „მოდელი რჩება გამოყენებაში შეზღუდვების გარეშე“ against 'გაშვება უნდა მოხდეს შესაბამისი შეზღუდვებით'. The system targets the weaker limb and misses the real gap (the same one reported in Finding 5). The proposal inserts an unsupported assertion that the decision-maker 'was directly informed'."
+  },
+  {
+    "finding_id": "doc:bank-a/MR-2022-Q1@1.0|obl:4964423/art8/p3#2@2021-01-01",
+    "review_in_scope": "yes",
+    "review_obligation_faithful": "yes",
+    "review_hallucination": "minor",
+    "review_unsupported_claims": "Says the document lacks a 'mechanism or policy' for turning changes into restrictions; a monitoring report is not where such a policy sits, and the real issue is that the stated decisions conflict with the duty. §4.3 'მოდელი რჩება გამოყენებაში' concerns M-005 and is not a significant risk change.",
+    "review_correct_verdict": "contradicts",
+    "review_verdict_correct": "partly",
+    "review_error_type": "too_lenient",
+    "review_argument_quality": 3,
+    "review_proposal_alignment": 2,
+    "review_gold_reason_alignment": 4,
+    "review_comment": "§2.2.1 PSI 0.27 above red with the ratio at 1.46 in the digital channel, and §2.3.1 „მოდელი რჩება გამოყენებაში შეზღუდვების გარეშე“, together with 12.4% missing values and §3.2.2 unrestricted use, show significant changes in model risk that did not lead to restriction or suspension, which is a contradiction rather than a partial. The proposal is a generic restatement and its second sentence ('the validation group ensures the mechanism operates') invents a role and does not require a concrete restriction or escalation."
+  }
+]

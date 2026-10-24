@@ -104,13 +104,24 @@ mapping:
   clause_text_cap: 1500         # characters of a clause shown to the model in candidate mode
   now: null                     # fix "today" for reproducible runs (ISO date)
 
-ranking:                        # score = gap x relevance (severity weights are all 1: severity is not used for now)
+ranking:
+  # signals (default): rules over what the pipeline knows about a gap (chosen on the gold set, 9 documents:
+  #   critical + high = 127 tasks, precision 0.55, recall 0.62; the gap x relevance formula: 176, 0.33, 0.48)
+  #   critical: a contradiction, whatever its relevance
+  #   high:     missing / partly covered AND relevant AND caused by an amendment the document predates
+  #   medium:   missing / partly covered with ONE of: relevant, amendment, the obligation names this document type
+  #   low:      the rest
+  # formula: score = gap x relevance (x severity) with the weights and thresholds below (the earlier ranking)
+  mode: signals
+  signals:
+    critical: [contradicts]
+    high_requires: [relevant, amendment]
+    medium_any: [relevant, amendment, doc_type]
+  # --- formula mode only
   severity:  {critical: 1, high: 1, medium: 1, low: 1}
   gap:       {contradicts: 1.0, none: 0.8, undecided: 0.8, partial: 0.6}   # none = missing
   relevance: {relevant: 1.0, possibly: 0.5}
   priority_thresholds: {critical: 0.95, high: 0.7, medium: 0.39}
-  # relevant:  contradicts 1.0 critical · missing 0.8 high · partial 0.6 medium
-  # possibly:  contradicts 0.5 medium   · missing 0.4 medium · partial 0.3 low
 
 tasks:
   new_amendment_days: 180       # the "new" badge on tasks caused by a recent amendment

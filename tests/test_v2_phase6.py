@@ -49,7 +49,7 @@ def board(env, **kw):
 
 def test_ranking_formula(env):
     cfg = json.loads(json.dumps(dict(env[0])))                  # the formula with explicit severity weights
-    cfg["ranking"] = {"severity": {"critical": 4, "high": 3, "medium": 2, "low": 1},
+    cfg["ranking"] = {"mode": "formula", "severity": {"critical": 4, "high": 3, "medium": 2, "low": 1},
                       "priority_thresholds": {"critical": 3.5, "high": 2.4, "medium": 1.2}}
     assert ranking.score(cfg, "critical", "none", "relevant") == 4.0
     assert ranking.score(cfg, "critical", "contradicts", "relevant") == 4.0            # same as none
@@ -58,17 +58,40 @@ def test_ranking_formula(env):
     assert ranking.explain(cfg, "high", "partial", "relevant")["factors"] == {"severity": 3, "gap": 0.6, "relevance": 1.0}
 
 
-def test_ranking_without_severity_from_the_config(env):
-    cfg = env[0]                                                 # configs/kg.yaml: severity not used
+def test_ranking_formula_mode_without_severity(env):
+    cfg = json.loads(json.dumps(dict(env[0])))
+    cfg["ranking"]["mode"] = "formula"                           # the earlier gap x relevance ranking
     assert ranking.score(cfg, "low", "none", "relevant") == ranking.score(cfg, "critical", "none", "relevant") == 0.8
     P = lambda v, r: ranking.priority(cfg, ranking.score(cfg, "high", v, r))  # noqa: E731
     assert P("contradicts", "relevant") == "critical"          # 1.0
     assert P("none", "relevant") == "high"                     # 0.8 (missing)
     assert P("partial", "relevant") == "medium"                # 0.6
     assert P("contradicts", "possibly") == "medium"            # 0.5
-    assert P("none", "possibly") == "medium"                   # 0.4
     assert P("partial", "possibly") == "low"                   # 0.3
     assert ranking.explain(cfg, "high", "partial", "relevant")["formula"] == "gap x relevance"
+
+
+def test_ranking_signals_from_the_config(env):
+    cfg = env[0]                                                 # configs/kg.yaml: mode signals
+    P = lambda v, r, c="pre_existing", d=False: ranking.priority(cfg, ranking.score(cfg, "high", v, r, c, d))  # noqa: E731
+    assert P("contradicts", "possibly") == P("contradicts", "relevant") == "critical"    # every contradiction
+    assert P("none", "relevant", "amendment") == P("partial", "relevant", "amendment") == "high"
+    assert P("none", "relevant") == P("partial", "possibly", "amendment") == P("none", "possibly", d=True) == "medium"
+    assert P("partial", "possibly") == P("none", None) == "low"
+    # inside a priority, more signals rank higher; the severity does not count
+    assert ranking.score(cfg, "low", "none", "relevant", "amendment", True) > ranking.score(cfg, "critical", "none", "relevant", "amendment")
+    assert ranking.score(cfg, "low", "contradicts", "possibly") < ranking.score(cfg, "low", "contradicts", "relevant")
+    assert all(ranking.score(cfg, None, "contradicts", r, c, d) > ranking.score(cfg, None, "none", "relevant", "amendment", True)
+               for r in ("relevant", "possibly") for c in ("amendment", None) for d in (True, False))
+    ex = ranking.explain(cfg, "high", "partial", "relevant", "amendment", True)
+    assert ex["mode"] == "signals" and ex["priority"] == "high" and ex["signals"] == {"relevant": True, "amendment": True, "doc_type": True}
+
+
+def test_doc_type_signal():
+    ob = {"required_doc": {"doc_types": ["policy", "procedure"]}}
+    assert ranking.doc_type_match(ob, "model_risk_policy") and ranking.doc_type_match(ob, "procedure")
+    assert not ranking.doc_type_match(ob, "validation_report") and not ranking.doc_type_match(ob, None)
+    assert not ranking.doc_type_match({}, "policy") and not ranking.doc_type_match(None, "policy")
 
 
 def test_sync_creates_one_task_per_proposal(env):
@@ -79,7 +102,8 @@ def test_sync_creates_one_task_per_proposal(env):
     assert all(r["status"] == "open" and r["key"].startswith(f"bank-a|{v}|") or r["kind"] == "new_document" for r in rows)
     assert [r["score"] for r in rows] == sorted((r["score"] for r in rows), reverse=True)
     for r in rows:
-        assert r["score"] == ranking.score(cfg, r["severity"], r["verdict"], r["relevance"])
+        dm = T.doc_match_of(store, r["doc_version_id"], store.get_node(r["obligation_id"]))
+        assert r["score"] == ranking.score(cfg, r["severity"], r["verdict"], r["relevance"], r["cause"], dm)
         assert r["priority"] == ranking.priority(cfg, r["score"])
         assert r["proposal_id"] in {p["id"] for p in props}
     ev = store.q("SELECT event FROM task_events")
@@ -93,6 +117,7 @@ def test_changing_weights_rescores_without_llm(env):
     cfg, store, run, llm, fake, v, owner, reg, _ = env
     before = {r["key"]: (r["score"], r["priority"]) for r in board(env)}
     calls = sum(fake.calls.values())
+    cfg["ranking"]["mode"] = "formula"
     cfg["ranking"]["gap"]["partial"] = 0.1
     cfg["ranking"]["priority_thresholds"]["high"] = 2.0
     n = T.rescore(cfg, store)
@@ -286,3 +311,14 @@ def test_assign_and_comment(env):
     ev = T.events_of(store, reg, key)
     assert ev[-1]["event"] == "comment" and ev[-1]["data"]["text"] == "შენიშვნა"
     assert T.list_tasks(cfg, store, owner, "bank-a", priority="nonexistent") == []
+
+
+def test_changing_signal_rules_rescores(env):
+    cfg, store, run, llm, fake, v, owner, reg, _ = env
+    cfg["ranking"]["signals"] = {"critical": [], "high_requires": [], "medium_any": []}    # everything low
+    T.rescore(cfg, store)
+    assert {r["priority"] for r in board(env)} == {"low"}
+    cfg["ranking"]["signals"] = {"critical": ["contradicts", "none", "partial"]}           # everything critical
+    assert T.rescore(cfg, store) > 0 and {r["priority"] for r in board(env)} == {"critical"}
+    ex = T.explain_task(cfg, store, owner, board(env)[0]["key"])
+    assert ex["ranking"]["mode"] == "signals" and "signals" in ex["ranking"]

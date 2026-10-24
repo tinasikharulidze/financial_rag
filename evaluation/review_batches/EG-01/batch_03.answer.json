@@ -1,0 +1,44 @@
+[
+  {
+    "finding_id": "doc:bank-a/EG-01@1.0|obl:4964423/art9/p2#1@2021-01-01",
+    "review_in_scope": "yes",
+    "review_obligation_faithful": "yes",
+    "review_hallucination": "minor",
+    "review_unsupported_claims": "Evidence cites ‘§—’ for the role table instead of §7. The claim that the document ‘does not mention the acquisition context’ is correct. Calling §3.3 a partial match is generous, since §3.3 only requires a named owner.",
+    "review_correct_verdict": "partial",
+    "review_verdict_correct": "yes",
+    "review_error_type": "none",
+    "review_argument_quality": 3,
+    "review_proposal_alignment": 3,
+    "review_gold_reason_alignment": null,
+    "review_comment": "§3.3 „თითოეულ მოდელს ჰყავს განსაზღვრული მფლობელი, რომელიც პასუხს აგებს' covers owner accountability for every model, which largely satisfies the sentence that the entity is owner and responsible for an acquired model. What is missing is only the acquisition case and the further duties of art. 9 ¶2 (own development/documentation policy, knowing the technical side and logic), which the finding does not address. The proposal just copies the regulation into §3.3 and is acceptable."
+  },
+  {
+    "finding_id": "doc:bank-a/EG-01@1.0|obl:4964423/art9_1/p2#1@2022-05-03",
+    "review_in_scope": "yes",
+    "review_obligation_faithful": "yes",
+    "review_hallucination": "minor",
+    "review_unsupported_claims": "The rationale says accuracy ‘and legality’ are principles that nearly address the duty. §3.2 does not address error-driven bias at all; it is an accuracy goal, not bias prevention. The proposal bolts the regulation’s sentence onto the accuracy principle without any mechanism.",
+    "review_correct_verdict": "none",
+    "review_verdict_correct": "partly",
+    "review_error_type": "too_lenient",
+    "review_argument_quality": 2,
+    "review_proposal_alignment": 2,
+    "review_gold_reason_alignment": 3,
+    "review_comment": "Nothing in the document deals with deviation: §3 has no principle of avoiding deviation ('გადახრისგან თავის არიდება') and no definition or typology of it, so ‘partial’ on the basis of §3.2 'სიზუსტე' is too generous; ‘none’ fits better. Gold stresses the missing principles of avoiding deviation and transparency and the missing typology, which the finding only touches indirectly, and the proposed fix adds neither."
+  },
+  {
+    "finding_id": "doc:bank-a/EG-01@1.0|obl:4964423/art9_1/p4#6@2022-05-03",
+    "review_in_scope": "yes",
+    "review_obligation_faithful": "yes",
+    "review_hallucination": "minor",
+    "review_unsupported_claims": "The rationale says the document leaves no rule for priority ‘when accuracy and social neutrality conflict’, which is slightly off: the document does not just omit the rule but declares accuracy the primary criterion (§3.2). The §4.1 quote is abbreviated with an ellipsis but is genuine.",
+    "review_correct_verdict": "contradicts",
+    "review_verdict_correct": "partly",
+    "review_error_type": "too_lenient",
+    "review_argument_quality": 3,
+    "review_proposal_alignment": 4,
+    "review_gold_reason_alignment": 4,
+    "review_comment": "§3.2 states „სიზუსტე წარმოადგენს მოდელის შერჩევის მთავარ კრიტერიუმს' and calls accuracy the „უპირველესი მიზანი', which conflicts with giving priority to socially neutral outcomes whenever accuracy does not fall significantly; the system sees the right clause but only labels it ‘partial’. §4.1 only bans protected attributes and is not a priority rule. The proposal adds the regulation’s condition to §3.2 and matches the gold fix, though it still keeps accuracy as the ‘main criterion’."
+  }
+]
