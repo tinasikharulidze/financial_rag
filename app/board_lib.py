@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 from collections import defaultdict
 
+from i18n_lang import localize
+
 PRIO_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 COV_ORDER = {"contradicts": 0, "none": 1, "undecided": 2, "partial": 3, "full": 4}
 REL_ORDER = {"relevant": 0, "possibly": 1}
@@ -109,7 +111,7 @@ def board_html(groups: list[dict], L: dict, dir_label: dict, users: dict[int, st
                     f"<tr data-key='{_e(r['key'])}'>"
                     f"<td data-k='{PRIO_ORDER.get(p, 9)}'><span class='pr'>{PRIO_ICON.get(p, '')}"
                     f"{_e(L['prio'].get(p, p))}</span></td>"
-                    f"<td class='sum'>{_e(r['title'])}</td>"
+                    f"<td class='sum'>{_e(localize(r['title']))}</td>"
                     f"<td data-k='{COV_ORDER.get(v, 9)}'>{pill(L['cov'].get(v, v or '—'), COV_COLOR.get(v, '#777'))}</td>"
                     f"<td data-k='{REL_ORDER.get(rel, 9)}'>"
                     f"{pill(L['rel'].get(rel, rel or '—'), REL_COLOR.get(rel, '#777'), outline=True)}</td>"

@@ -51,19 +51,22 @@ llm:
     # - gemini/gemini-3.5-flash
     # - gemini/gemini-3.5-flash-lite
     # - gemini/gemini-2.5-flash
-  step_models: {}      # e.g.  judge: [gemini/gemini-3.6-flash]   (steps: extract_obligations, amend_diff, doc_profile,
-                       #       triage, locate, judge, propose, merge, qa_answer, compare_summary, classify_doc)
+  step_models:         # e.g.  judge: [gemini/gemini-3.6-flash]   (steps: extract_obligations, amend_diff, doc_profile,
+                       #       triage, locate, judge, propose, merge, qa_answer, compare_summary, classify_doc, agent_step)
+    agent_step: [gemini/gemini-3.8-flash, gemini/gemini-3.6-flash, gemini/gemini-3.0-flash, gemini/gemini-2.5-flash, gemini/gemini-3.5-flash-lite, gemini/gemini-3.1-flash-lite, gemini/gemma-4-26b-a4b-it]   # the Copilot chat: Flash models (free tier: ~20 requests a day each), Gemma as the last resort
   daily_request_limit: 14400   # per model and day (each Gemma 4 model on AI Studio: 14.4K/day, 30/min); null = unlimited
   max_requests_per_run: 150    # safety valve for one process (a full check of one document: ~45 requests)
   json_mode: true              # response_format=json_object; the prompts ask for JSON anyway
   model_overrides:             # substring of the model id -> options
     "gemma": {reasoning_effort: null, thinking_level: minimal, tokens_per_minute: 14000}
+    "gemini-3.8": {by_step: {agent_step: {thinking_level: low}}}   # 3.8 Flash refuses thinking_level "minimal" (400); by_step beats step_options
     # Gemma 4: a thinking budget is rejected (400) -> thinking_level (minimal = off); free tier: 16K input tokens/min,
     # paced at 14K for headroom
   step_options:                # step -> options; every other step uses the model's default (Gemma: minimal = off)
     triage: {thinking_level: high, timeout_s: 300}   # relevance: thinking ON (as for the model risk documents)
     judge: {thinking_level: high, timeout_s: 300}    # coverage: thinking ON (a hung request falls back to no thinking)
     extract_obligations: {timeout_s: 900}            # long answers (a unit with 20 criteria = 15K+ tokens) need time
+    agent_step: {thinking_level: minimal, reasoning_effort: null, timeout_s: 40, server_error_backoff_s: [3, 6]}   # Goni chat: answer fast, no long thinking; a provider error is retried twice, quickly, then the next model
   thinking_off_after_timeout: true   # a thinking request that times out (or fails twice) is asked once more without
                                      # thinking: Gemma sometimes "thinks" past any timeout on the same input
   thinking_level: null         # default for every model (null = not sent)
@@ -138,5 +141,11 @@ demo:
   roles: ["რისკების მართვა", "შესაბამისობა", "იურიდიული"]
 
 # ----------------------------------------------------------------------------------------------------------- web app
+agent:                          # the Copilot chat panel (kg/agent, app/view_chat.py)
+  enabled: true
+  max_steps: 5                  # model calls per question (tool calls included)
+  turn_timeout_s: 75            # a question gives up after this (retries that would pass it end with "model not available")
+  max_prompt_chars: 48000       # older tool results are dropped above this (Flash has no 14K tokens/min pacing like Gemma)
+
 ui:
   extra_pages: false           # Q&A, version comparison, graph, evaluation (hidden for now)

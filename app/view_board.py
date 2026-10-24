@@ -6,6 +6,7 @@ import json
 
 import streamlit as st
 from common import prio_badge, verdict_badge, version_label
+from i18n_lang import localize
 from i18n_ka import CAUSE, DOMAIN, KIND, PRIORITY, RELEVANCE, T, TASK_STATUS, VERDICT, tr
 
 def _component():
@@ -90,7 +91,7 @@ def _detail(cfg, store, user, key, can_edit):
     t = ex["task"]
     cov = ex["coverage"] or {}
     tri = ex["triage"] or {}
-    st.markdown(f"#### {t['title']}")
+    st.markdown(f"#### {localize(t['title'])}")
     if st.button("📍 " + T["show_in_doc"], key=f"goto{key}", type="primary"):
         open_analysis(t["doc_version_id"], task_focus(store, t))
         st.rerun()
@@ -114,7 +115,8 @@ def _detail(cfg, store, user, key, can_edit):
     if tri.get("reason"):
         st.markdown(f"**{T['col_relevance']}:** {tri['reason']}")
     for c in [x for x in (ob["props"].get("citations") or []) if x.get("kind") == "provision"][:3]:
-        src = f"[{c.get('label') or c.get('id')}]({c['url']})" if c.get("url") else (c.get("label") or c.get("id"))
+        lab = localize(c.get("label")) or c.get("id")
+        src = f"[{lab}]({c['url']})" if c.get("url") else lab
         st.markdown(f"**{T['regulation']}:** {src}" + (f" — „{c['quote']}“" if c.get("quote") else ""))
     pr = store.q1("SELECT * FROM proposals WHERE id=?", (t["proposal_id"],)) if t.get("proposal_id") else None
     if pr:
@@ -157,7 +159,7 @@ def _irrelevant(store, info: dict) -> dict[str, list[dict]]:
         for oid in irrelevant_everywhere(store, vers):
             ob = store.get_node(oid) or {"props": {}}
             c = next((x for x in (ob["props"].get("citations") or []) if x.get("kind") == "provision"), {})
-            items.append({"statement": ob["props"].get("statement") or oid, "source": c.get("label") or "",
+            items.append({"statement": ob["props"].get("statement") or oid, "source": localize(c.get("label")) or "",
                           "url": c.get("url")})
         out[d] = items
     return out

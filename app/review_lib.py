@@ -6,6 +6,7 @@ import json
 from collections import Counter, defaultdict
 
 from i18n_ka import CAUSE, KIND, PRIORITY, ROLE, T, TASK_STATUS, VERDICT, VERDICT_COLOR, tr
+from i18n_lang import localize
 from kg.mapping.docview import load_doc
 from kg.store.v2tables import jload
 
@@ -135,8 +136,8 @@ def card_html(c: dict) -> str:
     if c.get("clause_quote"):
         parts.append(f"<div><b>{_e(T['clause'])}:</b> „{_e(c['clause_quote'])}“</div>")
     for r in c.get("regulation", []):
-        link = f"<a href='{_e(r['url'])}' target='_blank'>{_e(r.get('label') or r['id'])}</a>" if r.get("url") \
-            else _e(r.get("label") or r["id"])
+        lab = localize(r.get("label")) or r["id"]
+        link = f"<a href='{_e(r['url'])}' target='_blank'>{_e(lab)}</a>" if r.get("url") else _e(lab)
         quote = f" — „{_e(r['quote'])}“" if r.get("quote") else ""
         parts.append(f"<div><b>{_e(T['regulation'])}:</b> {link}{quote}</div>")
     parts.append("</div>")
@@ -292,7 +293,8 @@ def render_html(model: dict, roles=None, relevances=None, focus: str | None = No
     out = [f"<!doctype html><meta charset='utf-8'><style>{CSS}{FOCUS_CSS}</style><div class='goni-scroll'>"]
     runs = _Runs()
     for u0 in model["units"]:
-        u = {**u0, "cards": [c for c in u0["cards"] if (roles is None or c["role"] in roles)
+        u = {**u0, "cards": [c for c in u0["cards"] if c["role"] != "anchor"      # a place for a NEW section: not in the original
+                             and (roles is None or c["role"] in roles)
                              and (relevances is None or c.get("relevance") in relevances)]}
         text = _e(u["text"])
         if u["unit_type"] == "heading":
@@ -375,8 +377,8 @@ def table_html(rows: list[dict], labels: dict, rel_label: dict, cov_label: dict,
         rel_html = f"<span class='pill' style='background:{rel_color.get(rel, '#777')}'>{_e(rel_label[rel])}</span>"
         cov_html = (f"<span class='pill' style='background:{cov_color.get(cov, '#777')}'>{_e(cov_label[cov])}</span>"
                     if rel != "irrelevant" else "—")
-        src = (f"<a href='{_e(r['url'])}' target='_blank' rel='noopener'>{_e(r['source'])} ↗</a>" if r.get("url")
-               else _e(r["source"]))
+        src = (f"<a href='{_e(r['url'])}' target='_blank' rel='noopener'>{_e(localize(r['source']))} ↗</a>" if r.get("url")
+               else _e(localize(r["source"])))
         body.append(f"<tr><td class='n' data-k='{i}'>{i}</td><td>{_e(r['statement'])}</td>"
                     f"<td data-k='{order_r.get(rel, 9)}'>{rel_html}</td>"
                     f"<td data-k='{order_v.get(cov, 9)}'>{cov_html}</td><td>{_e(r['reason'])}</td><td>{src}</td></tr>")
@@ -559,7 +561,7 @@ def _segments_html(segs, numbered: bool) -> str:
 
 
 def revised_html(model: dict, labels: dict, can_edit: bool, roles=None, relevances=None, part: str = "doc",
-                 focus: str | None = None) -> str:
+                 focus: str | None = None, focus_clause: str | None = None) -> str:
     """The document as it reads with the open and accepted proposals: ONE block per changed clause (several
     proposals for a clause are merged); hovering a block shows why each obligation changed it and the buttons
     (accept / reject / edit / details, or undo once accepted). "Edit" makes the text editable in place.
@@ -568,7 +570,7 @@ def revised_html(model: dict, labels: dict, can_edit: bool, roles=None, relevanc
     proposals for new documents, shown in their own tab)."""
     rv = revised_view(model)
 
-    def block(s: dict, sn: str = "", table_original: str | None = None) -> str:
+    def block(s: dict, sn: str = "", table_original: str | None = None, hit: bool = False) -> str:
         multi = len(s["items"]) > 1
         cls = "chg " + CLASS_FOR[s["role"]] + {"accepted": " accepted", "mixed": " mixed"}.get(s["status"], "") + \
             (" add" if s["kind"] != "adjust_clause" else "")
@@ -606,7 +608,7 @@ def revised_html(model: dict, labels: dict, can_edit: bool, roles=None, relevanc
         btns += f"<button data-action='details'>ⓘ {_e(labels['details'])}</button>"
         edbar = (f"<div class='edbar'><button class='ok' data-action='save'>✓ {_e(labels['save_accept'])}</button>"
                  f"<button data-action='cancel'>{_e(labels['cancel'])}</button></div>") if can_edit else ""
-        if focus and s["slot"] == focus:
+        if hit or (focus and s["slot"] == focus):
             cls += " focus"
         return (f"<div class='{cls}' data-oids='{_e('|'.join(s['oids']))}' data-slot='{_e(s['slot'])}'>"
                 f"{sn}{head}{txt}{st_}<div class='act'>{why}{btns}</div>{edbar}</div>")
@@ -618,22 +620,24 @@ def revised_html(model: dict, labels: dict, can_edit: bool, roles=None, relevanc
         items = [block(s) for s in rv["new_documents"] if shown(s)]
         return ("<div class='goni-scroll free'" + (f" data-focus='{_e(focus)}'" if focus else "") + ">"
                 + "".join(items) + "</div>") if items else ""
-    out = ["<div class='goni-scroll'" + (f" data-focus='{_e(focus)}'" if focus else "") + ">"]
+    mark = focus or focus_clause                      # what the left half highlights, the right half highlights too
+    out = ["<div class='goni-scroll'" + (f" data-focus='{_e(mark)}'" if mark else "") + ">"]
     runs = _Runs()
     for x in rv["units"]:
         u = x["unit"]
+        on = bool(focus_clause) and u["id"] == focus_clause
         sn = f"<span class='sn'>{_e(u['section_no'])}</span>" if u["unit_type"] == "clause" and u["section_no"] else ""
         if x["change"] and shown(x["change"]):
             runs.head(None)
-            out.append(block(x["change"], sn, u["text"] if u["unit_type"] == "table" else None))
+            out.append(block(x["change"], sn, u["text"] if u["unit_type"] == "table" else None, on))
         elif u["unit_type"] == "heading":
             runs.head(None)
-            out.append(f"<div class='h'>{_e(u['text'])}</div>")
+            out.append(f"<div class='h{' focus' if on else ''}'>{_e(u['text'])}</div>")
         else:
             head = runs.head(u["text"] if u["unit_type"] == "table" else None)
             tbl = table_html_of(u["text"], head=head) if u["unit_type"] == "table" else None
             cls = "u" + (" tb" + ("" if head else " cont") if tbl else
-                         " t" if u["unit_type"] in ("table", "metadata") else "")
+                         " t" if u["unit_type"] in ("table", "metadata") else "") + (" focus" if on else "")
             out.append(f"<div class='{cls}'>{sn}{tbl or _e(u['text'])}</div>")
         for s in x["inserts"]:
             if shown(s):

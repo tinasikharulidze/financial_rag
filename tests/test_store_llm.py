@@ -417,3 +417,30 @@ def test_pacing_uses_the_providers_token_count(store, tmp_path):
     llm.call("a", [{"role": "user", "content": "x" * 100}], Out)
     llm.call("b", [{"role": "user", "content": "y" * 200}], Out)       # 900 (real) + 200 > 1000 -> waits
     assert len(sleeps) == 1
+
+
+def test_chat_step_moves_on_when_a_model_refuses_an_option(store, tmp_path):
+    calls = []
+
+    def backend(model, messages, max_tokens, temperature, json_mode, purpose=None, **kw):
+        calls.append(model)
+        if model == "m1":
+            raise BadRequestError('{"error": {"code": 400, "message": "Thinking level MINIMAL is not supported for this model."}}')
+        return {"text": '{"x": 1}', "input_tokens": 1, "output_tokens": 1}
+
+    c = cfg_with(["m1", "m2"], limit=5)
+    c["llm"]["step_models"] = {}
+    llm = LLM(c, store, "r", backend=backend, cache_dir=tmp_path / "c", sleep=lambda s: None)
+    assert llm.call("agent_step", [{"role": "user", "content": "hi"}], Out).parsed.x == 1
+    assert calls == ["m1", "m2"]
+
+
+def test_a_models_own_setting_for_one_step_beats_the_steps_setting(store, tmp_path):
+    c = cfg_with(["gemini/gemini-3.8-flash", "m2"], limit=5)
+    c["llm"]["step_options"] = {"agent_step": {"thinking_level": "minimal", "timeout_s": 40}}
+    c["llm"]["model_overrides"] = {"gemini-3.8": {"by_step": {"agent_step": {"thinking_level": "low"}}}}
+    llm = LLM(c, store, "r", backend=lambda *a, **k: {"text": "{}"}, cache_dir=tmp_path / "c")
+    assert llm.options_for("gemini/gemini-3.8-flash", "agent_step")["thinking_level"] == "low"
+    assert llm.options_for("gemini/gemini-3.8-flash", "agent_step")["timeout_s"] == 40
+    assert llm.options_for("m2", "agent_step")["thinking_level"] == "minimal"
+    assert llm.options_for("gemini/gemini-3.8-flash", "judge")["thinking_level"] != "low"

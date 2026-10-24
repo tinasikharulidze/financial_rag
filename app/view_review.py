@@ -257,14 +257,15 @@ def _keep_preview(store, user, model, vid, slot, oids):
             save_edit(store, user, vid, slot, s["text"], s["pids"], "preview")
 
 
-def _revised_document(cfg, store, user, model, vid, can_edit, roles=None, rels=None, part="doc", focus=None):
+def _revised_document(cfg, store, user, model, vid, can_edit, roles=None, rels=None, part="doc", focus=None,
+                      focus_clause=None):
     """The proposed version (``part="doc"``, right half) or the proposals for new documents (``part="new"``, own
     tab): hovering a change shows why, and accept / reject / edit."""
     labels = {k: T[k] for k in ("accept", "reject", "details", "undo", "obligation", "new_docs", "edit", "save_accept",
                                 "cancel", "merged_from", "preview_merge", "overlap_warn", "user_edited",
                                 "model_merged")}
     labels["accepted"] = T["accepted_mark"]
-    html = revised_html(model, labels, can_edit, roles, rels, part, focus)
+    html = revised_html(model, labels, can_edit, roles, rels, part, focus, focus_clause if part == "doc" else None)
     if not html:
         st.caption(T["no_match"])
         return
@@ -278,6 +279,95 @@ def _revised_document(cfg, store, user, model, vid, can_edit, roles=None, rels=N
     done = handle_action(cfg, store, user, model, vid, action if isinstance(action, dict) else None)
     if done:
         st.rerun()
+
+
+def _shown_slots(rv: dict, roles, rels) -> list[dict]:
+    """The changes of the proposed version that the filters show (the clause changes and the added sections)."""
+    from review_lib import slot_shown
+    slots = [x["change"] for x in rv["units"] if x["change"]] + [y for x in rv["units"] for y in x["inserts"]]
+    return [s for s in slots if slot_shown(s, roles, rels)]
+
+
+def _accept_all(store, user, model, vid, slots: list[dict]) -> int:
+    from kg.services import decisions as DC
+    n = 0
+    for s in slots:
+        oids = [o for o in s["oids"] if (model["tasks"].get(o) or {}).get("status") == "open"]
+        if not oids:
+            continue
+        _keep_preview(store, user, model, vid, s["slot"], oids)
+        for o in oids:
+            DC.accept(store, user, model["tasks"][o]["key"])
+            n += 1
+    return n
+
+
+def _reject_all_window(store, user, model, slots: list[dict]):
+    from kg.services import decisions as DC
+    keys = [model["tasks"][o]["key"] for s in slots for o in s["oids"]
+            if (model["tasks"].get(o) or {}).get("status") in ("open", "accepted")]
+    st.markdown(T["reject_all_n"].format(n=len(keys)))
+    reason = st.text_input(T["reason_reject"], key="rv_rej_reason")
+    if st.button("✕ " + T["reject_all"], key="rv_rej_go", type="primary", disabled=not (reason or "").strip() or not keys):
+        for k in keys:
+            DC.not_relevant(store, user, k, reason)
+        st.session_state.pop("rv_reject_all", None)
+        st.rerun()
+
+
+def _revised_file(cfg, store, user, model, vid):
+    """A Word file of the document with the accepted changes applied (to edit and upload as the next version)."""
+    st.caption(T["revised_help"])
+    if st.button(T["build_revised"], key="br", use_container_width=True):
+        from kg.services.revise import build_revised
+        ids = [t["proposal_id"] for t in model["tasks"].values() if t["status"] == "accepted" and t["proposal_id"]]
+        if not ids:
+            st.info(T["no_accepted"])
+        else:
+            st.session_state["revised"] = with_llm(
+                cfg, store, "revise", lambda run, llm: build_revised(cfg, store, run, llm, user, vid, ids))
+    rev = st.session_state.get("revised")
+    if rev:
+        st.write(f"{T['changed_clauses']}: {rev['changed_clauses']} · {T['added']}: {rev['added']}")
+        for key, label, mime in (("docx", T["download_docx"], "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+                                 ("md", T["download_md"], "text/markdown")):
+            p = cfg.path("uploads") / rev[key]
+            if p.exists():
+                st.download_button(label, p.read_bytes(), file_name=p.name, mime=mime, key=f"dl{key}",
+                                   use_container_width=True)
+
+
+def _publish(store, user, vid):
+    """ONE action: publishing; when issues are still open the same button says so and publishes anyway."""
+    from kg.services import documents as D
+    st.caption(T["publish_help"])
+    n_open = D.open_task_count(store, vid)
+    label = T["publish_anyway"].format(n=n_open) if n_open else T["publish"]
+    if st.button(label, type="primary", key="pub", use_container_width=True):
+        D.publish(store, user, vid, force=bool(n_open))
+        st.success(T["published_ok"])
+        st.rerun()
+
+
+def _proposed_actions(cfg, store, user, model, vid, rv, roles, rels):
+    """Under "Proposed version": accept all, reject all, the Word file and publishing (one row, equal buttons)."""
+    slots = _shown_slots(rv, roles, rels)
+    a, r, f, p = st.columns(4, gap="small")
+    if a.button(T["accept_all"], key="rv_acc_all", icon=":material/done_all:", help=T["accept_all_help"],
+                use_container_width=True, disabled=not slots):
+        n = _accept_all(store, user, model, vid, slots)
+        st.toast(T["accepted_all"].format(n=n))
+        st.rerun()
+    if r.button(T["reject_all"], key="rv_rej_all", icon=":material/close:", help=T["reject_all_help"],
+                use_container_width=True, disabled=not slots):
+        st.session_state["rv_reject_all"] = True
+    with f.popover(T["revised_file"], icon=":material/download:", use_container_width=True):
+        _revised_file(cfg, store, user, model, vid)
+    with p.popover(T["publish"], icon=":material/publish:", use_container_width=True):
+        _publish(store, user, vid)
+    if st.session_state.get("rv_reject_all"):
+        st.dialog(T["reject_all_title"], on_dismiss=lambda: st.session_state.pop("rv_reject_all", None))(
+            _reject_all_window)(store, user, model, slots)
 
 
 def _merge_button(cfg, store, user, vid, pending: list[str]):
@@ -294,6 +384,11 @@ def _merge_button(cfg, store, user, vid, pending: list[str]):
 def _proposal_window(cfg, store, user, model, vid, oids, can_edit):
     """The window of one block: one proposal, or several merged ones (each in its own section)."""
     if len(oids) == 1:
+        import view_chat
+        if st.button(view_chat._s("ask_followup"), key=f"ask_fu_{oids[0]}", icon=":material/chat:"):
+            view_chat.open_with(store, cfg, version_id=vid, obligation_id=oids[0])
+            _close_proposal()                       # the window closes; the panel opens on the same item
+            st.rerun()
         _task_panel(cfg, store, user, model, vid, oids[0], can_edit)
         return
     from review_lib import revised_view
@@ -338,7 +433,8 @@ def render(cfg, store, user):
     if focus:
         b1, b2 = st.columns([8, 1], vertical_alignment="center")
         where = T["focus_new_doc"] if focus.get("kind") == "new_document" else ""
-        b1.info(f"📍 {focus['title']}" + (f" — {where}" if where else ""))
+        from i18n_lang import localize
+        b1.info(f"📍 {localize(focus['title'])}" + (f" — {where}" if where else ""))
         if b2.button("✕", key="focus_off", help=T["close"]):
             st.session_state.pop("review_focus", None)
             st.rerun()
@@ -361,12 +457,17 @@ def render(cfg, store, user):
     left, right = st.columns(2)
     left.markdown(f"**{T['doc_original']}**")
     right.markdown(f"**{T['doc_proposed']}**")
+    if can_edit:                     # right under the title: what can be done with the whole proposed version
+        _, right = st.columns(2)
+        with right:
+            _proposed_actions(cfg, store, user, model, vid, rv, roles, rels)
     left, right = st.columns(2)
     with left:
         from review_lib import DOC_HEIGHT
         html_frame(render_html(model, roles, rels, focus=(focus or {}).get("clause_id")), DOC_HEIGHT + 6)
     with right:
-        _revised_document(cfg, store, user, model, vid, can_edit, roles, rels, focus=(focus or {}).get("slot"))
+        _revised_document(cfg, store, user, model, vid, can_edit, roles, rels, focus=(focus or {}).get("slot"),
+                          focus_clause=(focus or {}).get("clause_id"))
     # under both documents, full width: the proposals for new documents and the obligations table
     new_n = len(rv["new_documents"])
     tab_new, tab_obl = st.tabs([f"{T['new_docs']} ({new_n})", f"{T['obl_table']} ({len(model['table'])})"])
@@ -381,34 +482,7 @@ def render(cfg, store, user):
         _obligation_table(model)
     if can_edit:
         st.divider()
-        if st.button(T["build_revised"], key="br"):
-            from kg.services.revise import build_revised
-            ids = [t["proposal_id"] for t in model["tasks"].values() if t["status"] == "accepted" and t["proposal_id"]]
-            if not ids:
-                st.info(T["no_accepted"])
-            else:
-                st.session_state["revised"] = with_llm(
-                    cfg, store, "revise", lambda run, llm: build_revised(cfg, store, run, llm, user, vid, ids))
-        rev = st.session_state.get("revised")
-        if rev:
-            st.write(f"{T['changed_clauses']}: {rev['changed_clauses']} · {T['added']}: {rev['added']}")
-            for key, label, mime in (("docx", T["download_docx"], "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-                                     ("md", T["download_md"], "text/markdown")):
-                p = cfg.path("uploads") / rev[key]
-                if p.exists():
-                    st.download_button(label, p.read_bytes(), file_name=p.name, mime=mime, key=f"dl{key}")
-        st.divider()
-        n_open = D.open_task_count(store, vid)
-        force = False
-        if n_open:
-            st.warning(f"{T['open_tasks_left']}: {n_open}")
-            force = st.checkbox(T["force_publish"], key="pubforce")
-        c1, c2 = st.columns(2)
-        if c1.button(T["publish"], type="primary", key="pub") and (not n_open or force):
-            D.publish(store, user, vid, force=force)
-            st.success(T["published_ok"])
-            st.rerun()
-        if c2.button(T["discard"], key="disc"):
+        if st.button(T["discard"], key="disc", help=T["discard_help"]):
             D.discard_draft(store, user, vid, cfg)
             st.session_state.pop("review_version", None)
             st.rerun()

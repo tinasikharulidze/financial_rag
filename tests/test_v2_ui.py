@@ -254,15 +254,29 @@ def test_regulator_is_read_only(env):
     assert not [b for b in at.button if b.key in ("pub", "disc", "br")]
 
 
-def test_publish_blocked_by_open_tasks(env):
+def test_publish_is_one_button_that_names_the_open_tasks(env):
     cfg, store, v, owner, fake = env
     at = app(env, "bank@demo.ge", "review", draft=True)
-    assert any("pubforce" == c.key for c in at.checkbox)
-    at.button(key="pub").click().run()
-    assert store.q1("SELECT status FROM document_versions WHERE id=?", (v,))["status"] == "draft"
-    at.checkbox(key="pubforce").check().run()
-    at.button(key="pub").click().run()
+    assert not [c for c in at.checkbox if c.key == "pubforce"]                    # no separate "anyway" tick
+    pub = at.button(key="pub")
+    assert "(" in pub.label                                                       # "Publish anyway (N open issues)"
+    pub.click().run()
     assert store.q1("SELECT status FROM document_versions WHERE id=?", (v,))["status"] == "published"
+
+
+def test_accept_all_accepts_every_shown_change(env):
+    cfg, store, v, owner, fake = env
+    q = ("SELECT COUNT(*) n FROM tasks t JOIN proposals p ON p.id=t.proposal_id WHERE t.doc_version_id=? "
+         "AND t.status='open' AND p.kind {} 'new_document'")
+    at = app(env, "bank@demo.ge", "review", draft=True)
+    at.session_state["dv_roles"] = ["contradicts", "anchor", "partial", "full"]       # show every change
+    at.session_state["dv_rel"] = ["relevant", "possibly"]
+    at.run()
+    before, new_docs = store.q1(q.format("<>"), (v,))["n"], store.q1(q.format("="), (v,))["n"]
+    at.button(key="rv_acc_all").click().run()
+    assert not at.exception
+    assert store.q1(q.format("<>"), (v,))["n"] < before                          # the shown changes are accepted
+    assert store.q1(q.format("="), (v,))["n"] == new_docs                        # the new-document tab is not touched
 
 
 def test_register_new_company(env):

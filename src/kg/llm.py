@@ -226,6 +226,7 @@ class LLM:
         self.max_live: int | None = llm_cfg.get("max_requests_per_run")
         self.calm_on_timeout: bool = bool(llm_cfg.get("thinking_off_after_timeout", True))
         self.live_requests = 0                      # network attempts made by this object (safety valve)
+        self.deadline: float | None = None          # time.time() after which a waiting request gives up (the chat sets it)
         self.temperature: float = float(llm_cfg.get("temperature", 0))
         self.max_tokens: int = int(llm_cfg.get("max_output_tokens", 8192))
         self.json_retries: int = int(llm_cfg.get("retries_on_invalid_json", 1))
@@ -274,11 +275,14 @@ class LLM:
         """Generation options: defaults < ``llm.model_overrides`` (substring of the model id) < ``llm.step_options``."""
         opts = {"json_mode": self.json_mode_default, "reasoning_effort": self.reasoning_effort,
                 "thinking_level": self.thinking_level, "timeout_s": self.timeout_s,
-                "tokens_per_minute": self.tokens_per_minute}
+                "tokens_per_minute": self.tokens_per_minute, "server_error_backoff_s": None}
         for pattern, o in self.model_overrides.items():
             if pattern in model:
-                opts.update(o or {})
+                opts.update({k: v for k, v in (o or {}).items() if k != "by_step"})
         opts.update(self.step_options.get(purpose or "") or {})
+        for pattern, o in self.model_overrides.items():          # a model's own setting for ONE step beats the step's
+            if pattern in model:
+                opts.update(((o or {}).get("by_step") or {}).get(purpose or "") or {})
         return opts
 
     def variant(self, model: str, purpose: str | None = None) -> dict:
@@ -288,6 +292,12 @@ class LLM:
 
     def estimate_tokens(self, messages: list[dict]) -> int:
         return int(sum(len(m.get("content") or "") for m in messages) / max(self.chars_per_token, 0.5)) + 1
+
+    def _nap(self, seconds: float):
+        """Sleep before a retry, unless the caller's deadline (an interactive chat turn) would pass meanwhile."""
+        if self.deadline is not None and time.time() + seconds > self.deadline:
+            raise LLMUnavailable("the model is not answering in time (waiting for a retry would take too long)")
+        self._sleep(seconds)
 
     def _pace(self, model: str, tokens: int, tpm: int | None):
         """Wait until ``tokens`` more input tokens fit into the model's tokens-per-minute window."""
@@ -392,7 +402,7 @@ class LLM:
                         n = waits.get(model, 0)
                         if n < len(self.rate_limit_backoff):
                             waits[model] = n + 1
-                            self._sleep(max(self.rate_limit_backoff[n], min(retry_hint(exc) or 0, 300.0)))
+                            self._nap(max(self.rate_limit_backoff[n], min(retry_hint(exc) or 0, 300.0)))
                             continue
                         skip.add(model)
                         if all(m in skip for m in self.models_for(purpose)):
@@ -408,6 +418,10 @@ class LLM:
                 self.store.quota_dec(model, day)                 # not answered: the provider does not charge it
                 self.store.log_llm_call(self.run_id, purpose, model, key, None, None, lat, False,
                                         f"{type(exc).__name__}: {str(exc)[:200]}")
+                if purpose == "agent_step" and is_bad_request(exc) and "not supported" in str(exc).lower() \
+                        and any(m not in skip and m != model for m in self.models_for(purpose)):
+                    skip.add(model)          # the chat must not die because one model refuses an option: try the next
+                    continue
                 if is_bad_request(exc) or not is_server_error(exc):
                     # the request itself is wrong (or an unknown error): repeating it cannot help
                     raise LLMRequestRejected(
@@ -425,7 +439,9 @@ class LLM:
                     self.store.log_llm_call(self.run_id, purpose, model, key, None, None, 0, False,
                                             "thinking_off: the next attempt is sent without thinking")
                     continue
-                if n >= len(self.backoff):                       # this model keeps failing: try the next one
+                backoff = [float(x) for x in opts["server_error_backoff_s"]] if opts.get("server_error_backoff_s") is not None \
+                    else self.backoff
+                if n >= len(backoff):                            # this model keeps failing: try the next one
                     skip.add(model)
                     if all(m in skip for m in self.models_for(purpose)):
                         raise LLMUnavailable(
@@ -433,8 +449,8 @@ class LLM:
                             f"({n + 1} attempts on {model}; last: {_provider_message(exc)}). Every finished step is "
                             "stored: repeat the same command later.") from exc
                     continue
-                wait = max(self.backoff[n], min(retry_hint(exc) or 0, 180.0))
-                self._sleep(wait * random.uniform(0.85, 1.15))
+                wait = max(backoff[n], min(retry_hint(exc) or 0, 180.0))
+                self._nap(wait * random.uniform(0.85, 1.15))
 
     # ------------------------------------------------------------------ public API
     def call(self, purpose: str, messages: list[dict], schema=None, max_tokens: int | None = None,
@@ -480,7 +496,9 @@ class LLM:
             path.write_text(json.dumps({"text": text, "model": model, "purpose": purpose}, ensure_ascii=False),
                             encoding="utf-8")
             return LLMResult(text, parsed, model, False, res.get("input_tokens"), res.get("output_tokens"), lat)
-        raise LLMValidationError(last_err)
+        err = LLMValidationError(last_err)
+        err.text = text                          # what the model actually wrote (a caller may still use plain prose)
+        raise err
 
     @staticmethod
     def _validate(text: str, schema):

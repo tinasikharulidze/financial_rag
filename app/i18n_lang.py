@@ -41,3 +41,38 @@ class Lang(Mapping):
 
     def __contains__(self, key):
         return key in self.ka
+
+
+# ------------------------------------------------------------------------------------------- labels built from data
+# Some labels are put together by the pipeline in Georgian (a law reference "მუხლი 5, პუნქტი 10", a task title
+# "შესწორება: ...", the short name of an act). In English the interface words in them are translated; the CONTENT
+# (the text of the law, an obligation, a clause) stays as it is. Only apply this to labels, never to content.
+_PREFIX_EN = (("შესწორება: ", "Amend clause: "), ("ახალი პუნქტი: ", "New clause: "),
+              ("ახალი დოკუმენტი: ", "New document: "))
+_WORDS_EN = (("ბრძანების მუხლი", "Order, article"), ("ქვეპუნქტი", "subparagraph"), ("პუნქტი", "paragraph"),
+             ("მუხლი", "Article"), ("დანართი", "Annex"))
+ACT_NAMES_EN: dict[str, str] = {}          # Georgian short name of an act -> English (filled from the config)
+
+
+def register_acts(acts: dict | None, domain_en: dict | None):
+    """The English name of an act = the English name of its first direction (configs/kg.yaml ``acts.*.domains``)."""
+    for a in (acts or {}).values():
+        a = a or {}
+        doms = a.get("domains") or []
+        if a.get("short") and (a.get("short_en") or (doms and (domain_en or {}).get(doms[0]))):
+            ACT_NAMES_EN[a["short"]] = a.get("short_en") or domain_en[doms[0]]
+
+
+def localize(label):
+    """A label made from data, in the language of the interface (see above). Georgian: unchanged."""
+    if not label or not isinstance(label, str) or current() != "en":
+        return label
+    for ka, en in _PREFIX_EN:
+        if label.startswith(ka):
+            label = en + label[len(ka):]
+            break
+    for ka, en in sorted(ACT_NAMES_EN.items(), key=lambda kv: -len(kv[0])):
+        label = label.replace(ka, en)
+    for ka, en in _WORDS_EN:
+        label = label.replace(ka, en)
+    return label
